@@ -324,6 +324,10 @@ async function createTicket(ctx) {
   }
 }
 
+app.get('/', (req, res) => {
+  res.send('Hala Support Bot is running. Open /dashboard');
+});
+
 app.get('/dashboard', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -347,11 +351,12 @@ app.get('/dashboard', async (req, res) => {
       <style>
         body {
           font-family: Arial, sans-serif;
-          background: #f4f6f8;
+          background: #3886fc;
           padding: 20px;
         }
         h1 {
           margin-bottom: 20px;
+          color: white;
         }
         .cards {
           display: flex;
