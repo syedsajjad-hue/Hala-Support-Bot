@@ -147,7 +147,7 @@ async function appendTicketToGoogleSheet(ticket) {
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: 'Sheet1!A:L',
+      range: 'Hala Support Tickets!A:L',
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[
