@@ -45,6 +45,26 @@ function ticketButtons(ticketId) {
   ]);
 }
 
+function getStatusBadge(status) {
+  if (status === 'Resolved') {
+    return '<span class="badge status-resolved">Resolved</span>';
+  }
+  if (status === 'New') {
+    return '<span class="badge status-new">New</span>';
+  }
+  return `<span class="badge status-open">${status || 'Open'}</span>`;
+}
+
+function getPriorityBadge(priority) {
+  if (priority === 'High') {
+    return '<span class="badge priority-high">High</span>';
+  }
+  if (priority === 'Medium') {
+    return '<span class="badge priority-medium">Medium</span>';
+  }
+  return `<span class="badge priority-low">${priority || 'Low'}</span>`;
+}
+
 bot.start((ctx) => {
   ctx.session = {};
   return ctx.reply(
@@ -113,7 +133,7 @@ bot.action(/assign_(.+)/, async (ctx) => {
 
     const newText =
       `New Ticket Created\n\n` +
-      `Ticket: ${data.id}\n` +
+      `Ticket: ${data.ticket_number || data.id}\n` +
       `Type: ${data.disposition}\n` +
       `Meter ID: ${data.driver_id}\n` +
       `Priority: ${data.priority}\n` +
@@ -150,7 +170,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
     try {
       await bot.telegram.sendMessage(
         data.telegram_user_id,
-        `Your ticket ${ticketId} has been resolved.`
+        `Your ticket ${data.ticket_number || ticketId} has been resolved.`
       );
     } catch (notifyErr) {
       console.log('Driver notify error:', notifyErr);
@@ -162,7 +182,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
 
     const newText =
       `Ticket Resolved\n\n` +
-      `Ticket: ${data.id}\n` +
+      `Ticket: ${data.ticket_number || data.id}\n` +
       `Type: ${data.disposition}\n` +
       `Meter ID: ${data.driver_id}\n` +
       `Priority: ${data.priority}\n` +
@@ -186,7 +206,7 @@ bot.on('text', async (ctx) => {
       const { data, error } = await supabase
         .from('tickets')
         .select('*')
-        .eq('id', text)
+        .or(`ticket_number.eq.${text},id.eq.${text.replace(/\D/g, '')}`)
         .single();
 
       ctx.session = {};
@@ -196,7 +216,7 @@ bot.on('text', async (ctx) => {
       }
 
       return ctx.reply(
-        `Ticket: ${data.id}\nType: ${data.disposition}\nStatus: ${data.status}\nAssigned: ${data.assigned_agent || 'Not Assigned'}`
+        `Ticket: ${data.ticket_number || data.id}\nType: ${data.disposition}\nStatus: ${data.status}\nAssigned: ${data.assigned_agent || 'Not Assigned'}`
       );
     }
 
@@ -284,6 +304,31 @@ async function createTicket(ctx) {
       priority = 'High';
     }
 
+    const { data: lastTicket, error: lastTicketError } = await supabase
+      .from('tickets')
+      .select('ticket_number')
+      .not('ticket_number', 'is', null)
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lastTicketError) {
+      console.log('Last ticket fetch error:', lastTicketError);
+    }
+
+    let nextNumber = 1;
+
+    if (lastTicket && lastTicket.ticket_number) {
+      const parts = lastTicket.ticket_number.split('-');
+      const lastNum = parseInt(parts[1], 10);
+
+      if (!isNaN(lastNum)) {
+        nextNumber = lastNum + 1;
+      }
+    }
+
+    const ticketNumber = `HALA-${String(nextNumber).padStart(3, '0')}`;
+
     const details = {
       meter_id: ctx.session.meter_id,
       fare: ctx.session.fare || null,
@@ -296,6 +341,7 @@ async function createTicket(ctx) {
       .from('tickets')
       .insert([
         {
+          ticket_number: ticketNumber,
           telegram_user_id: String(ctx.from.id),
           driver_id: ctx.session.meter_id,
           disposition: ctx.session.disposition,
@@ -321,7 +367,7 @@ async function createTicket(ctx) {
         await bot.telegram.sendMessage(
           process.env.TEAM_CHAT_ID,
           `New Ticket Created\n\n` +
-            `Ticket: ${data.id}\n` +
+            `Ticket: ${data.ticket_number}\n` +
             `Type: ${ctx.session.disposition}\n` +
             `Meter ID: ${ctx.session.meter_id}\n` +
             `Priority: ${priority}\n` +
@@ -334,7 +380,7 @@ async function createTicket(ctx) {
     }
 
     ctx.session = {};
-    return ctx.reply(`Ticket created: ${data.id}`);
+    return ctx.reply(`✅ Ticket created: ${data.ticket_number}`);
   } catch (err) {
     console.log('Create ticket error:', err);
     ctx.session = {};
@@ -361,103 +407,256 @@ app.get('/dashboard', async (req, res) => {
     const total = data.length;
     const open = data.filter(t => t.status !== 'Resolved').length;
     const resolved = data.filter(t => t.status === 'Resolved').length;
+    const high = data.filter(t => t.priority === 'High').length;
 
-    let html = `
-    <html>
-    <head>
-      <title>Hala Support Dashboard</title>
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          background: #f4f8ff;
-          padding: 20px;
-          color: #1f2937;
-        }
-        h1 {
-          margin-bottom: 20px;
-          color: #3886fc;
-        }
-        .cards {
-          display: flex;
-          gap: 20px;
-          margin-bottom: 20px;
-          flex-wrap: wrap;
-        }
-        .card {
-          background: white;
-          padding: 20px;
-          border-radius: 12px;
-          box-shadow: 0 4px 12px rgba(56, 134, 252, 0.15);
-          border-top: 4px solid #3886fc;
-          flex: 1;
-          min-width: 200px;
-          text-align: center;
-        }
-        .card h2 {
-          margin: 0;
-          color: #3886fc;
-          font-size: 32px;
-        }
-        .card p {
-          margin-top: 8px;
-          color: #4b5563;
-          font-weight: 600;
-        }
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          background: white;
-          border-radius: 12px;
-          overflow: hidden;
-          box-shadow: 0 4px 12px rgba(56, 134, 252, 0.12);
-        }
-        th, td {
-          padding: 12px;
-          border-bottom: 1px solid #e5e7eb;
-          text-align: left;
-        }
-        th {
-          background: #3886fc;
-          color: white;
-        }
-        tr:hover {
-          background: #eef5ff;
-        }
-      </style>
-    </head>
-    <body>
-      <h1>Hala Support Dashboard</h1>
-      <div class="cards">
-        <div class="card"><h2>${total}</h2><p>Total Tickets</p></div>
-        <div class="card"><h2>${open}</h2><p>Open Tickets</p></div>
-        <div class="card"><h2>${resolved}</h2><p>Resolved Tickets</p></div>
-      </div>
-      <table>
-        <tr>
-          <th>ID</th>
-          <th>Type</th>
-          <th>Status</th>
-          <th>Agent</th>
-          <th>Meter</th>
-          <th>Priority</th>
-        </tr>
-    `;
+    let rows = '';
 
     data.forEach(t => {
-      html += `
+      rows += `
         <tr>
-          <td>${t.id}</td>
+          <td>${t.ticket_number || '#' + t.id}</td>
           <td>${t.disposition || '-'}</td>
-          <td>${t.status || '-'}</td>
+          <td>${getStatusBadge(t.status)}</td>
           <td>${t.assigned_agent || '-'}</td>
           <td>${t.driver_id || '-'}</td>
-          <td>${t.priority || '-'}</td>
+          <td>${getPriorityBadge(t.priority)}</td>
         </tr>
       `;
     });
 
-    html += `
-      </table>
+    const html = `
+    <html>
+    <head>
+      <title>Hala Premium Dashboard</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <style>
+        * {
+          box-sizing: border-box;
+        }
+        body {
+          margin: 0;
+          font-family: Arial, sans-serif;
+          background: #f3f7ff;
+          color: #1f2937;
+        }
+        .topbar {
+          background: linear-gradient(135deg, #3886fc, #2563eb);
+          color: white;
+          padding: 24px 32px;
+          box-shadow: 0 4px 16px rgba(37, 99, 235, 0.25);
+        }
+        .topbar h1 {
+          margin: 0;
+          font-size: 28px;
+          font-weight: 700;
+        }
+        .topbar p {
+          margin: 8px 0 0;
+          opacity: 0.95;
+          font-size: 14px;
+        }
+        .container {
+          padding: 24px;
+        }
+        .cards {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 18px;
+          margin-bottom: 24px;
+        }
+        .card {
+          background: white;
+          border-radius: 18px;
+          padding: 22px;
+          box-shadow: 0 8px 24px rgba(56, 134, 252, 0.12);
+          border: 1px solid #e5edff;
+        }
+        .card-title {
+          font-size: 14px;
+          color: #6b7280;
+          margin-bottom: 10px;
+          font-weight: 600;
+        }
+        .card-value {
+          font-size: 34px;
+          font-weight: 700;
+          color: #3886fc;
+        }
+        .panel {
+          background: white;
+          border-radius: 18px;
+          padding: 20px;
+          box-shadow: 0 8px 24px rgba(56, 134, 252, 0.10);
+          border: 1px solid #e5edff;
+        }
+        .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+        .panel-title {
+          font-size: 20px;
+          font-weight: 700;
+          color: #111827;
+        }
+        .search-box {
+          padding: 12px 14px;
+          width: 280px;
+          max-width: 100%;
+          border: 1px solid #c7d7ff;
+          border-radius: 12px;
+          outline: none;
+          font-size: 14px;
+        }
+        .search-box:focus {
+          border-color: #3886fc;
+          box-shadow: 0 0 0 3px rgba(56, 134, 252, 0.12);
+        }
+        .table-wrap {
+          overflow-x: auto;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          min-width: 760px;
+        }
+        th {
+          text-align: left;
+          padding: 14px 16px;
+          background: #3886fc;
+          color: white;
+          font-size: 14px;
+        }
+        td {
+          padding: 14px 16px;
+          border-bottom: 1px solid #eef2ff;
+          font-size: 14px;
+          color: #374151;
+        }
+        tr:hover td {
+          background: #f8fbff;
+        }
+        .badge {
+          display: inline-block;
+          padding: 6px 10px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .status-new {
+          background: #dbeafe;
+          color: #1d4ed8;
+        }
+        .status-open {
+          background: #fef3c7;
+          color: #b45309;
+        }
+        .status-resolved {
+          background: #dcfce7;
+          color: #15803d;
+        }
+        .priority-high {
+          background: #fee2e2;
+          color: #b91c1c;
+        }
+        .priority-medium {
+          background: #fef3c7;
+          color: #b45309;
+        }
+        .priority-low {
+          background: #e0e7ff;
+          color: #4338ca;
+        }
+        @media (max-width: 768px) {
+          .topbar {
+            padding: 20px;
+          }
+          .container {
+            padding: 16px;
+          }
+          .panel-header {
+            align-items: stretch;
+          }
+          .search-box {
+            width: 100%;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="topbar">
+        <h1>Hala Premium Support Dashboard</h1>
+        <p>Live ticket overview and support operations center</p>
+      </div>
+
+      <div class="container">
+        <div class="cards">
+          <div class="card">
+            <div class="card-title">Total Tickets</div>
+            <div class="card-value">${total}</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Open Tickets</div>
+            <div class="card-value">${open}</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Resolved Tickets</div>
+            <div class="card-value">${resolved}</div>
+          </div>
+          <div class="card">
+            <div class="card-title">High Priority</div>
+            <div class="card-value">${high}</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Ticket List</div>
+            <input
+              type="text"
+              id="searchInput"
+              class="search-box"
+              placeholder="Search by ticket, type, status, agent, meter..."
+              onkeyup="filterTable()"
+            />
+          </div>
+
+          <div class="table-wrap">
+            <table id="ticketTable">
+              <thead>
+                <tr>
+                  <th>Ticket</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Agent</th>
+                  <th>Meter</th>
+                  <th>Priority</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        function filterTable() {
+          const input = document.getElementById('searchInput');
+          const filter = input.value.toLowerCase();
+          const table = document.getElementById('ticketTable');
+          const tr = table.getElementsByTagName('tr');
+
+          for (let i = 1; i < tr.length; i++) {
+            const rowText = tr[i].innerText.toLowerCase();
+            tr[i].style.display = rowText.includes(filter) ? '' : 'none';
+          }
+        }
+      </script>
     </body>
     </html>
     `;
