@@ -14,6 +14,8 @@ const WEBHOOK_PATH = '/telegram-webhook';
 const DASHBOARD_USER = 'admin';
 const DASHBOARD_PASS = 'admin';
 
+const ALERT_AFTER_MINUTES = 30;
+
 if (!process.env.BOT_TOKEN) {
   throw new Error('BOT_TOKEN is missing');
 }
@@ -52,8 +54,8 @@ function getStatusBadge(status) {
   if (status === 'Resolved') {
     return '<span class="badge status-resolved">Resolved</span>';
   }
-  if (status === 'New') {
-    return '<span class="badge status-new">New</span>';
+  if (status === 'Pending' || status === 'New') {
+    return '<span class="badge status-pending">Pending</span>';
   }
   return `<span class="badge status-open">${status || 'Open'}</span>`;
 }
@@ -66,6 +68,26 @@ function getPriorityBadge(priority) {
     return '<span class="badge priority-medium">Medium</span>';
   }
   return `<span class="badge priority-low">${priority || 'Low'}</span>`;
+}
+
+function protectDashboard(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Hala Dashboard"');
+    return res.status(401).send('Authentication required.');
+  }
+
+  const base64Credentials = authHeader.split(' ')[1];
+  const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
+  const [username, password] = credentials.split(':');
+
+  if (username === DASHBOARD_USER && password === DASHBOARD_PASS) {
+    return next();
+  }
+
+  res.setHeader('WWW-Authenticate', 'Basic realm="Hala Dashboard"');
+  return res.status(401).send('Invalid credentials.');
 }
 
 async function getNextTicketNumber() {
@@ -96,24 +118,59 @@ async function getNextTicketNumber() {
   return `HALA-${String(nextNumber).padStart(3, '0')}`;
 }
 
-function protectDashboard(req, res, next) {
-  const authHeader = req.headers.authorization;
+async function sendUnresolvedAlert(ticket) {
+  try {
+    if (!process.env.TEAM_CHAT_ID) return;
 
-  if (!authHeader || !authHeader.startsWith('Basic ')) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="Hala Dashboard"');
-    return res.status(401).send('Authentication required.');
+    const assignedText = ticket.assigned_agent || 'Not Assigned';
+
+    await bot.telegram.sendMessage(
+      process.env.TEAM_CHAT_ID,
+      `🚨 Unresolved Ticket Alert\n\n` +
+        `Ticket: ${ticket.ticket_number || ticket.id}\n` +
+        `Type: ${ticket.disposition || '-'}\n` +
+        `Meter ID: ${ticket.driver_id || '-'}\n` +
+        `Priority: ${ticket.priority || '-'}\n` +
+        `Assigned: ${assignedText}\n` +
+        `Status: 🟡 Pending\n` +
+        `Alert: Not resolved in ${ALERT_AFTER_MINUTES} minutes`
+    );
+  } catch (err) {
+    console.log('Unresolved alert send error:', err);
   }
+}
 
-  const base64Credentials = authHeader.split(' ')[1];
-  const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
-  const [username, password] = credentials.split(':');
+async function checkUnresolvedTickets() {
+  try {
+    const alertBefore = new Date(Date.now() - ALERT_AFTER_MINUTES * 60 * 1000).toISOString();
 
-  if (username === DASHBOARD_USER && password === DASHBOARD_PASS) {
-    return next();
+    const { data, error } = await supabase
+      .from('tickets')
+      .select('*')
+      .neq('status', 'Resolved')
+      .lte('created_at', alertBefore);
+
+    if (error) {
+      console.log('Unresolved ticket query error:', error);
+      return;
+    }
+
+    for (const ticket of data || []) {
+      if (ticket.alert_sent === true) continue;
+
+      await sendUnresolvedAlert(ticket);
+
+      await supabase
+        .from('tickets')
+        .update({
+          alert_sent: true,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', ticket.id);
+    }
+  } catch (err) {
+    console.log('checkUnresolvedTickets error:', err);
   }
-
-  res.setHeader('WWW-Authenticate', 'Basic realm="Hala Dashboard"');
-  return res.status(401).send('Invalid credentials.');
 }
 
 bot.start((ctx) => {
@@ -183,12 +240,13 @@ bot.action(/assign_(.+)/, async (ctx) => {
     await ctx.answerCbQuery('Ticket assigned');
 
     const newText =
-      `New Ticket Created\n\n` +
+      `📝 Ticket Updated\n\n` +
       `Ticket: ${data.ticket_number || data.id}\n` +
       `Type: ${data.disposition}\n` +
       `Meter ID: ${data.driver_id}\n` +
       `Priority: ${data.priority}\n` +
-      `Assigned: ${agentName}`;
+      `Assigned: ${agentName}\n` +
+      `Status: 🟡 Pending`;
 
     await ctx.editMessageText(newText, ticketButtons(ticketId));
   } catch (err) {
@@ -206,6 +264,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
       .update({
         status: 'Resolved',
         resolved_at: new Date().toISOString(),
+        alert_sent: false,
         updated_at: new Date().toISOString()
       })
       .eq('id', ticketId)
@@ -221,7 +280,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
     try {
       await bot.telegram.sendMessage(
         data.telegram_user_id,
-        `Your ticket ${data.ticket_number || ticketId} has been resolved.`
+        `✅ Ticket resolved: ${data.ticket_number || ticketId}`
       );
     } catch (notifyErr) {
       console.log('Driver notify error:', notifyErr);
@@ -232,13 +291,13 @@ bot.action(/resolve_(.+)/, async (ctx) => {
     const assignedText = data.assigned_agent || 'Not Assigned';
 
     const newText =
-      `Ticket Resolved\n\n` +
+      `✅ Ticket Resolved\n\n` +
       `Ticket: ${data.ticket_number || data.id}\n` +
       `Type: ${data.disposition}\n` +
       `Meter ID: ${data.driver_id}\n` +
       `Priority: ${data.priority}\n` +
       `Assigned: ${assignedText}\n` +
-      `Status: Resolved`;
+      `Status: 🟢 Resolved`;
 
     await ctx.editMessageText(newText);
   } catch (err) {
@@ -268,9 +327,7 @@ bot.on('text', async (ctx) => {
         return ctx.reply('Ticket not found.');
       }
 
-      return ctx.reply(
-        `Ticket: ${data.ticket_number || data.id}\nType: ${data.disposition}\nStatus: ${data.status}\nAssigned: ${data.assigned_agent || 'Not Assigned'}`
-      );
+      return ctx.reply(`Ticket: ${data.ticket_number || data.id}`);
     }
 
     if (ctx.session.step === 'disposition') {
@@ -379,7 +436,8 @@ async function createTicket(ctx) {
           details_json: details,
           photo_file_id: ctx.session.photo_file_id || null,
           priority,
-          status: 'New',
+          status: 'Pending',
+          alert_sent: false,
           updated_at: new Date().toISOString()
         }
       ])
@@ -396,12 +454,13 @@ async function createTicket(ctx) {
       if (process.env.TEAM_CHAT_ID) {
         await bot.telegram.sendMessage(
           process.env.TEAM_CHAT_ID,
-          `New Ticket Created\n\n` +
+          `🆕 New Ticket Created\n\n` +
             `Ticket: ${data.ticket_number}\n` +
             `Type: ${ctx.session.disposition}\n` +
             `Meter ID: ${ctx.session.meter_id}\n` +
             `Priority: ${priority}\n` +
-            `Assigned: Not Assigned`,
+            `Assigned: Not Assigned\n` +
+            `Status: 🟡 Pending`,
           ticketButtons(data.id)
         );
       }
@@ -457,12 +516,10 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
     const html = `
     <html>
     <head>
-      <title>Hala Home Dashboard</title>
+      <title>Hala Premium Dashboard</title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <style>
-        * {
-          box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
         body {
           margin: 0;
           font-family: Arial, sans-serif;
@@ -485,9 +542,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           opacity: 0.95;
           font-size: 14px;
         }
-        .container {
-          padding: 24px;
-        }
+        .container { padding: 24px; }
         .cards {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -545,9 +600,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           border-color: #3886fc;
           box-shadow: 0 0 0 3px rgba(56, 134, 252, 0.12);
         }
-        .table-wrap {
-          overflow-x: auto;
-        }
+        .table-wrap { overflow-x: auto; }
         table {
           width: 100%;
           border-collapse: collapse;
@@ -566,9 +619,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           font-size: 14px;
           color: #374151;
         }
-        tr:hover td {
-          background: #f8fbff;
-        }
+        tr:hover td { background: #f8fbff; }
         .badge {
           display: inline-block;
           padding: 6px 10px;
@@ -576,13 +627,13 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           font-size: 12px;
           font-weight: 700;
         }
-        .status-new {
-          background: #dbeafe;
-          color: #1d4ed8;
-        }
-        .status-open {
+        .status-pending {
           background: #fef3c7;
           color: #b45309;
+        }
+        .status-open {
+          background: #e0f2fe;
+          color: #0369a1;
         }
         .status-resolved {
           background: #dcfce7;
@@ -601,24 +652,16 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           color: #4338ca;
         }
         @media (max-width: 768px) {
-          .topbar {
-            padding: 20px;
-          }
-          .container {
-            padding: 16px;
-          }
-          .panel-header {
-            align-items: stretch;
-          }
-          .search-box {
-            width: 100%;
-          }
+          .topbar { padding: 20px; }
+          .container { padding: 16px; }
+          .panel-header { align-items: stretch; }
+          .search-box { width: 100%; }
         }
       </style>
     </head>
     <body>
       <div class="topbar">
-        <h1>Hala Support Dashboard</h1>
+        <h1>Hala Premium Support Dashboard</h1>
         <p>Live ticket overview and support operations center</p>
       </div>
 
@@ -710,6 +753,8 @@ app.listen(PORT, async () => {
     console.error('Webhook setup error:', err);
   }
 });
+
+setInterval(checkUnresolvedTickets, 60 * 1000);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
