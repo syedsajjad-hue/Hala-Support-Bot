@@ -5,7 +5,11 @@ const { Telegraf, Markup, session } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
+app.use(express.json());
+
 const PORT = process.env.PORT || 10000;
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://hala-support-bot.onrender.com';
+const WEBHOOK_PATH = '/telegram-webhook';
 
 if (!process.env.BOT_TOKEN) {
   throw new Error('BOT_TOKEN is missing');
@@ -363,19 +367,9 @@ app.get('/dashboard', async (req, res) => {
     <head>
       <title>Hala Support Dashboard</title>
       <style>
-        body {
-          font-family: Arial, sans-serif;
-          background: #f4f6f8;
-          padding: 20px;
-        }
-        h1 {
-          margin-bottom: 20px;
-        }
-        .cards {
-          display: flex;
-          gap: 20px;
-          margin-bottom: 20px;
-        }
+        body { font-family: Arial, sans-serif; background: #f4f6f8; padding: 20px; }
+        h1 { margin-bottom: 20px; }
+        .cards { display: flex; gap: 20px; margin-bottom: 20px; }
         .card {
           background: white;
           padding: 20px;
@@ -396,33 +390,17 @@ app.get('/dashboard', async (req, res) => {
           border-bottom: 1px solid #ddd;
           text-align: left;
         }
-        th {
-          background: #2c3e50;
-          color: white;
-        }
-        tr:hover {
-          background: #f1f1f1;
-        }
+        th { background: #2c3e50; color: white; }
+        tr:hover { background: #f1f1f1; }
       </style>
     </head>
     <body>
       <h1>Hala Support Dashboard</h1>
-
       <div class="cards">
-        <div class="card">
-          <h2>${total}</h2>
-          <p>Total Tickets</p>
-        </div>
-        <div class="card">
-          <h2>${open}</h2>
-          <p>Open Tickets</p>
-        </div>
-        <div class="card">
-          <h2>${resolved}</h2>
-          <p>Resolved Tickets</p>
-        </div>
+        <div class="card"><h2>${total}</h2><p>Total Tickets</p></div>
+        <div class="card"><h2>${open}</h2><p>Open Tickets</p></div>
+        <div class="card"><h2>${resolved}</h2><p>Resolved Tickets</p></div>
       </div>
-
       <table>
         <tr>
           <th>ID</th>
@@ -460,27 +438,17 @@ app.get('/dashboard', async (req, res) => {
   }
 });
 
-let botStarted = false;
-
-async function startBot() {
-  if (botStarted) {
-    console.log('Bot already started, skipping duplicate launch');
-    return;
-  }
-
-  try {
-    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    await bot.launch({ dropPendingUpdates: true });
-    botStarted = true;
-    console.log('Bot started');
-  } catch (err) {
-    console.error('Bot start error:', err);
-  }
-}
+app.use(bot.webhookCallback(WEBHOOK_PATH));
 
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  await startBot();
+  try {
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    await bot.telegram.setWebhook(`${RENDER_URL}${WEBHOOK_PATH}`);
+    console.log(`Webhook set to ${RENDER_URL}${WEBHOOK_PATH}`);
+  } catch (err) {
+    console.error('Webhook setup error:', err);
+  }
 });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
