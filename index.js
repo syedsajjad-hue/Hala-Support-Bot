@@ -367,31 +367,62 @@ app.get('/dashboard', async (req, res) => {
     <head>
       <title>Hala Support Dashboard</title>
       <style>
-        body { font-family: Arial, sans-serif; background: #f4f6f8; padding: 20px; }
-        h1 { margin-bottom: 20px; }
-        .cards { display: flex; gap: 20px; margin-bottom: 20px; }
+        body {
+          font-family: Arial, sans-serif;
+          background: #f4f8ff;
+          padding: 20px;
+          color: #1f2937;
+        }
+        h1 {
+          margin-bottom: 20px;
+          color: #3886fc;
+        }
+        .cards {
+          display: flex;
+          gap: 20px;
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+        }
         .card {
           background: white;
           padding: 20px;
-          border-radius: 10px;
-          box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(56, 134, 252, 0.15);
+          border-top: 4px solid #3886fc;
           flex: 1;
+          min-width: 200px;
           text-align: center;
+        }
+        .card h2 {
+          margin: 0;
+          color: #3886fc;
+          font-size: 32px;
+        }
+        .card p {
+          margin-top: 8px;
+          color: #4b5563;
+          font-weight: 600;
         }
         table {
           width: 100%;
           border-collapse: collapse;
           background: white;
-          border-radius: 10px;
+          border-radius: 12px;
           overflow: hidden;
+          box-shadow: 0 4px 12px rgba(56, 134, 252, 0.12);
         }
         th, td {
           padding: 12px;
-          border-bottom: 1px solid #ddd;
+          border-bottom: 1px solid #e5e7eb;
           text-align: left;
         }
-        th { background: #2c3e50; color: white; }
-        tr:hover { background: #f1f1f1; }
+        th {
+          background: #3886fc;
+          color: white;
+        }
+        tr:hover {
+          background: #eef5ff;
+        }
       </style>
     </head>
     <body>
