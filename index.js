@@ -170,6 +170,73 @@ async function appendTicketToGoogleSheet(ticket) {
     console.log('Ticket appended to Google Sheet');
   } catch (err) {
     console.log('Sheet error:', err.message);
+    if (err.response && err.response.data) {
+      console.log('Sheet error details:', err.response.data);
+    }
+  }
+}
+
+async function updateResolvedTicketInGoogleSheet(ticket) {
+  try {
+    if (
+      !process.env.GOOGLE_SHEET_ID ||
+      !process.env.GOOGLE_CLIENT_EMAIL ||
+      !process.env.GOOGLE_PRIVATE_KEY
+    ) {
+      console.log('Google Sheets env vars missing, skipping sheet update');
+      return;
+    }
+
+    const getResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      range: 'Hala Support Tickets!A:L'
+    });
+
+    const rows = getResponse.data.values || [];
+    if (rows.length < 2) {
+      console.log('No data rows found in Google Sheet');
+      return;
+    }
+
+    let targetRowIndex = -1;
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const ticketNumberInSheet = row[0];
+
+      if (ticketNumberInSheet === ticket.ticket_number) {
+        targetRowIndex = i + 1;
+        break;
+      }
+    }
+
+    if (targetRowIndex === -1) {
+      console.log(`Ticket ${ticket.ticket_number} not found in Google Sheet`);
+      return;
+    }
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+      range: `Hala Support Tickets!G${targetRowIndex}:L${targetRowIndex}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[
+          'Resolved',
+          ticket.assigned_agent || 'Not Assigned',
+          ticket.telegram_user_id || '',
+          ticket.photo_file_id || '',
+          ticket.id || '',
+          ticket.resolved_at || new Date().toISOString()
+        ]]
+      }
+    });
+
+    console.log(`Google Sheet updated for resolved ticket ${ticket.ticket_number}`);
+  } catch (err) {
+    console.log('Google Sheet resolve update error:', err.message);
+    if (err.response && err.response.data) {
+      console.log('Google error response:', err.response.data);
+    }
   }
 }
 
@@ -288,11 +355,11 @@ bot.action(/assign_(.+)/, async (ctx) => {
       })
       .eq('id', ticketId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error || !data) {
-      console.log('Assign button error:', error);
-      await ctx.answerCbQuery('Assign failed');
+      console.log('Assign button error:', error || 'No matching ticket found');
+      await ctx.answerCbQuery('Ticket not found or already removed');
       return;
     }
 
@@ -328,13 +395,15 @@ bot.action(/resolve_(.+)/, async (ctx) => {
       })
       .eq('id', ticketId)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error || !data) {
-      console.log('Resolve button error:', error);
-      await ctx.answerCbQuery('Resolve failed');
+      console.log('Resolve button error:', error || 'No matching ticket found');
+      await ctx.answerCbQuery('Ticket not found or already removed');
       return;
     }
+
+    await updateResolvedTicketInGoogleSheet(data);
 
     try {
       await bot.telegram.sendMessage(
