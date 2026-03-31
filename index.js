@@ -628,30 +628,115 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
       return res.send('Error loading dashboard');
     }
 
-    const total = data.length;
-    const open = data.filter(t => t.status !== 'Resolved').length;
-    const resolved = data.filter(t => t.status === 'Resolved').length;
-    const high = data.filter(t => t.priority === 'High').length;
+    const tickets = data || [];
+
+    const total = tickets.length;
+    const open = tickets.filter(t => t.status !== 'Resolved').length;
+    const resolved = tickets.filter(t => t.status === 'Resolved').length;
+    const high = tickets.filter(t => t.priority === 'High').length;
+
+    const uniqueAgents = [...new Set(
+      tickets
+        .map(t => t.assigned_agent)
+        .filter(v => v && v.trim() !== '')
+    )].sort();
+
+    const byStatus = {};
+    const byPriority = {};
+    const byDay = {};
+    const byAgent = {};
+
+    tickets.forEach(t => {
+      const status = t.status || 'Pending';
+      const priority = t.priority || 'Low';
+      const agent = t.assigned_agent || 'Not Assigned';
+
+      byStatus[status] = (byStatus[status] || 0) + 1;
+      byPriority[priority] = (byPriority[priority] || 0) + 1;
+      byAgent[agent] = (byAgent[agent] || 0) + 1;
+
+      const createdAt = t.created_at
+        ? new Date(t.created_at).toISOString().slice(0, 10)
+        : 'Unknown';
+
+      byDay[createdAt] = (byDay[createdAt] || 0) + 1;
+    });
+
+    const dayLabels = Object.keys(byDay).sort();
+    const dayValues = dayLabels.map(k => byDay[k]);
+
+    const agentLabels = Object.keys(byAgent);
+    const agentValues = agentLabels.map(k => byAgent[k]);
+
+    const statusLabels = Object.keys(byStatus);
+    const statusValues = statusLabels.map(k => byStatus[k]);
+
+    const maxDayValue = Math.max(...dayValues, 1);
+    const maxAgentValue = Math.max(...agentValues, 1);
+    const maxStatusValue = Math.max(...statusValues, 1);
 
     let rows = '';
 
-    data.forEach(t => {
+    tickets.forEach(t => {
+      const status = t.status || 'Pending';
+      const priority = t.priority || 'Low';
+      const agent = t.assigned_agent || 'Not Assigned';
+
       rows += `
-        <tr>
+        <tr 
+          data-status="${status}"
+          data-priority="${priority}"
+          data-agent="${agent}"
+        >
           <td>${t.ticket_number || '#' + t.id}</td>
           <td>${t.disposition || '-'}</td>
-          <td>${getStatusBadge(t.status)}</td>
-          <td>${t.assigned_agent || '-'}</td>
+          <td>${getStatusBadge(status)}</td>
+          <td>${agent}</td>
           <td>${t.driver_id || '-'}</td>
-          <td>${getPriorityBadge(t.priority)}</td>
+          <td>${getPriorityBadge(priority)}</td>
+          <td>${t.created_at ? new Date(t.created_at).toLocaleString() : '-'}</td>
         </tr>
       `;
     });
 
+    const dayBars = dayLabels.map((label, i) => `
+      <div class="bar-row">
+        <div class="bar-label">${label}</div>
+        <div class="bar-track">
+          <div class="bar-fill blue" style="width:${(dayValues[i] / maxDayValue) * 100}%"></div>
+        </div>
+        <div class="bar-value">${dayValues[i]}</div>
+      </div>
+    `).join('');
+
+    const agentBars = agentLabels.map((label, i) => `
+      <div class="bar-row">
+        <div class="bar-label">${label}</div>
+        <div class="bar-track">
+          <div class="bar-fill green" style="width:${(agentValues[i] / maxAgentValue) * 100}%"></div>
+        </div>
+        <div class="bar-value">${agentValues[i]}</div>
+      </div>
+    `).join('');
+
+    const statusBars = statusLabels.map((label, i) => `
+      <div class="bar-row">
+        <div class="bar-label">${label}</div>
+        <div class="bar-track">
+          <div class="bar-fill orange" style="width:${(statusValues[i] / maxStatusValue) * 100}%"></div>
+        </div>
+        <div class="bar-value">${statusValues[i]}</div>
+      </div>
+    `).join('');
+
+    const agentOptions = uniqueAgents.map(agent => `
+      <option value="${agent}">${agent}</option>
+    `).join('');
+
     const html = `
     <html>
     <head>
-      <title>Hala Premium Dashboard</title>
+      <title>Hala Analytics Dashboard</title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <style>
         * { box-sizing: border-box; }
@@ -674,10 +759,12 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
         }
         .topbar p {
           margin: 8px 0 0;
-          opacity: 0.95;
           font-size: 14px;
+          opacity: 0.95;
         }
-        .container { padding: 24px; }
+        .container {
+          padding: 24px;
+        }
         .cards {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -702,44 +789,111 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           font-weight: 700;
           color: #3886fc;
         }
-        .panel {
+        .filters, .charts-grid, .table-panel {
+          background: white;
+          border-radius: 18px;
+          padding: 20px;
+          box-shadow: 0 8px 24px rgba(56, 134, 252, 0.10);
+          border: 1px solid #e5edff;
+          margin-bottom: 24px;
+        }
+        .filters h2, .table-title, .chart-title {
+          margin-top: 0;
+          margin-bottom: 16px;
+          font-size: 20px;
+          color: #111827;
+        }
+        .filter-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 14px;
+        }
+        .filter-control {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .filter-control label {
+          font-size: 13px;
+          font-weight: 700;
+          color: #4b5563;
+        }
+        .filter-control input,
+        .filter-control select {
+          padding: 12px 14px;
+          border: 1px solid #c7d7ff;
+          border-radius: 12px;
+          outline: none;
+          font-size: 14px;
+          background: white;
+        }
+        .filter-control input:focus,
+        .filter-control select:focus {
+          border-color: #3886fc;
+          box-shadow: 0 0 0 3px rgba(56, 134, 252, 0.12);
+        }
+        .charts-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+          gap: 18px;
+          background: transparent;
+          border: none;
+          box-shadow: none;
+          padding: 0;
+        }
+        .chart-card {
           background: white;
           border-radius: 18px;
           padding: 20px;
           box-shadow: 0 8px 24px rgba(56, 134, 252, 0.10);
           border: 1px solid #e5edff;
         }
-        .panel-header {
-          display: flex;
-          justify-content: space-between;
+        .bar-row {
+          display: grid;
+          grid-template-columns: 110px 1fr 40px;
+          gap: 10px;
           align-items: center;
-          flex-wrap: wrap;
-          gap: 12px;
-          margin-bottom: 18px;
+          margin-bottom: 12px;
         }
-        .panel-title {
-          font-size: 20px;
+        .bar-label {
+          font-size: 12px;
+          color: #374151;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .bar-track {
+          height: 14px;
+          background: #eef2ff;
+          border-radius: 999px;
+          overflow: hidden;
+        }
+        .bar-fill {
+          height: 100%;
+          border-radius: 999px;
+        }
+        .bar-fill.blue {
+          background: linear-gradient(90deg, #3886fc, #60a5fa);
+        }
+        .bar-fill.green {
+          background: linear-gradient(90deg, #10b981, #34d399);
+        }
+        .bar-fill.orange {
+          background: linear-gradient(90deg, #f59e0b, #fbbf24);
+        }
+        .bar-value {
+          font-size: 12px;
           font-weight: 700;
           color: #111827;
+          text-align: right;
         }
-        .search-box {
-          padding: 12px 14px;
-          width: 280px;
-          max-width: 100%;
-          border: 1px solid #c7d7ff;
-          border-radius: 12px;
-          outline: none;
-          font-size: 14px;
+        .table-wrap {
+          overflow-x: auto;
         }
-        .search-box:focus {
-          border-color: #3886fc;
-          box-shadow: 0 0 0 3px rgba(56, 134, 252, 0.12);
-        }
-        .table-wrap { overflow-x: auto; }
         table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 760px;
+          min-width: 900px;
         }
         th {
           text-align: left;
@@ -754,7 +908,9 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           font-size: 14px;
           color: #374151;
         }
-        tr:hover td { background: #f8fbff; }
+        tr:hover td {
+          background: #f8fbff;
+        }
         .badge {
           display: inline-block;
           padding: 6px 10px;
@@ -786,18 +942,20 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           background: #e0e7ff;
           color: #4338ca;
         }
+        .empty-note {
+          color: #6b7280;
+          font-size: 14px;
+        }
         @media (max-width: 768px) {
           .topbar { padding: 20px; }
           .container { padding: 16px; }
-          .panel-header { align-items: stretch; }
-          .search-box { width: 100%; }
         }
       </style>
     </head>
     <body>
       <div class="topbar">
-        <h1>Hala Premium Support Dashboard</h1>
-        <p>Live ticket overview and support operations center</p>
+        <h1>Hala Analytics Dashboard</h1>
+        <p>Filters, live ticket analytics, and support performance overview</p>
       </div>
 
       <div class="container">
@@ -820,18 +978,60 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">Ticket List</div>
-            <input
-              type="text"
-              id="searchInput"
-              class="search-box"
-              placeholder="Search by ticket, type, status, agent, meter..."
-              onkeyup="filterTable()"
-            />
+        <div class="filters">
+          <h2>Filters</h2>
+          <div class="filter-grid">
+            <div class="filter-control">
+              <label>Search</label>
+              <input type="text" id="searchInput" placeholder="Ticket, type, agent, meter..." onkeyup="filterTable()" />
+            </div>
+            <div class="filter-control">
+              <label>Status</label>
+              <select id="statusFilter" onchange="filterTable()">
+                <option value="">All</option>
+                <option value="Pending">Pending</option>
+                <option value="Resolved">Resolved</option>
+              </select>
+            </div>
+            <div class="filter-control">
+              <label>Priority</label>
+              <select id="priorityFilter" onchange="filterTable()">
+                <option value="">All</option>
+                <option value="High">High</option>
+                <option value="Medium">Medium</option>
+                <option value="Low">Low</option>
+              </select>
+            </div>
+            <div class="filter-control">
+              <label>Agent</label>
+              <select id="agentFilter" onchange="filterTable()">
+                <option value="">All</option>
+                <option value="Not Assigned">Not Assigned</option>
+                ${agentOptions}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title">Tickets Per Day</div>
+            ${dayBars || '<div class="empty-note">No data yet</div>'}
           </div>
 
+          <div class="chart-card">
+            <div class="chart-title">Agent Performance</div>
+            ${agentBars || '<div class="empty-note">No assigned tickets yet</div>'}
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-title">Status Breakdown</div>
+            ${statusBars || '<div class="empty-note">No status data yet</div>'}
+          </div>
+        </div>
+
+        <div class="table-panel">
+          <div class="table-title">Ticket List</div>
           <div class="table-wrap">
             <table id="ticketTable">
               <thead>
@@ -842,6 +1042,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
                   <th>Agent</th>
                   <th>Meter</th>
                   <th>Priority</th>
+                  <th>Created At</th>
                 </tr>
               </thead>
               <tbody>
@@ -854,15 +1055,29 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
 
       <script>
         function filterTable() {
-          const input = document.getElementById('searchInput');
-          const filter = input.value.toLowerCase();
-          const table = document.getElementById('ticketTable');
-          const tr = table.getElementsByTagName('tr');
+          const search = document.getElementById('searchInput').value.toLowerCase();
+          const status = document.getElementById('statusFilter').value;
+          const priority = document.getElementById('priorityFilter').value;
+          const agent = document.getElementById('agentFilter').value;
 
-          for (let i = 1; i < tr.length; i++) {
-            const rowText = tr[i].innerText.toLowerCase();
-            tr[i].style.display = rowText.includes(filter) ? '' : 'none';
-          }
+          const rows = document.querySelectorAll('#ticketTable tbody tr');
+
+          rows.forEach(row => {
+            const text = row.innerText.toLowerCase();
+            const rowStatus = row.getAttribute('data-status');
+            const rowPriority = row.getAttribute('data-priority');
+            const rowAgent = row.getAttribute('data-agent');
+
+            const matchesSearch = text.includes(search);
+            const matchesStatus = !status || rowStatus === status;
+            const matchesPriority = !priority || rowPriority === priority;
+            const matchesAgent = !agent || rowAgent === agent;
+
+            row.style.display =
+              matchesSearch && matchesStatus && matchesPriority && matchesAgent
+                ? ''
+                : 'none';
+          });
         }
       </script>
     </body>
