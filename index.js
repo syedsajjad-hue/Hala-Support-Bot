@@ -11,6 +11,9 @@ const PORT = process.env.PORT || 10000;
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://hala-support-bot.onrender.com';
 const WEBHOOK_PATH = '/telegram-webhook';
 
+const DASHBOARD_USER = 'admin';
+const DASHBOARD_PASS = 'admin';
+
 if (!process.env.BOT_TOKEN) {
   throw new Error('BOT_TOKEN is missing');
 }
@@ -81,7 +84,6 @@ async function getNextTicketNumber() {
   for (const row of data || []) {
     const value = row.ticket_number;
 
-    // Only accept sequence style like HALA-001, HALA-002, HALA-123
     if (typeof value === 'string' && /^HALA-\d{3}$/.test(value)) {
       const num = parseInt(value.split('-')[1], 10);
       if (!isNaN(num) && num > maxNumber) {
@@ -92,6 +94,26 @@ async function getNextTicketNumber() {
 
   const nextNumber = maxNumber + 1;
   return `HALA-${String(nextNumber).padStart(3, '0')}`;
+}
+
+function protectDashboard(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Hala Dashboard"');
+    return res.status(401).send('Authentication required.');
+  }
+
+  const base64Credentials = authHeader.split(' ')[1];
+  const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
+  const [username, password] = credentials.split(':');
+
+  if (username === DASHBOARD_USER && password === DASHBOARD_PASS) {
+    return next();
+  }
+
+  res.setHeader('WWW-Authenticate', 'Basic realm="Hala Dashboard"');
+  return res.status(401).send('Invalid credentials.');
 }
 
 bot.start((ctx) => {
@@ -400,7 +422,7 @@ app.get('/', (req, res) => {
   res.send('Bot server is running');
 });
 
-app.get('/dashboard', async (req, res) => {
+app.get('/dashboard', protectDashboard, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('tickets')
