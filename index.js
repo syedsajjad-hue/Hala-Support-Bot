@@ -65,6 +65,35 @@ function getPriorityBadge(priority) {
   return `<span class="badge priority-low">${priority || 'Low'}</span>`;
 }
 
+async function getNextTicketNumber() {
+  const { data, error } = await supabase
+    .from('tickets')
+    .select('ticket_number')
+    .not('ticket_number', 'is', null);
+
+  if (error) {
+    console.log('Ticket number fetch error:', error);
+    return 'HALA-001';
+  }
+
+  let maxNumber = 0;
+
+  for (const row of data || []) {
+    const value = row.ticket_number;
+
+    // Only accept sequence style like HALA-001, HALA-002, HALA-123
+    if (typeof value === 'string' && /^HALA-\d{3}$/.test(value)) {
+      const num = parseInt(value.split('-')[1], 10);
+      if (!isNaN(num) && num > maxNumber) {
+        maxNumber = num;
+      }
+    }
+  }
+
+  const nextNumber = maxNumber + 1;
+  return `HALA-${String(nextNumber).padStart(3, '0')}`;
+}
+
 bot.start((ctx) => {
   ctx.session = {};
   return ctx.reply(
@@ -203,10 +232,12 @@ bot.on('text', async (ctx) => {
     const text = ctx.message.text.trim();
 
     if (ctx.session.step === 'check_ticket_number') {
+      const numericPart = text.replace(/\D/g, '');
+
       const { data, error } = await supabase
         .from('tickets')
         .select('*')
-        .or(`ticket_number.eq.${text},id.eq.${text.replace(/\D/g, '')}`)
+        .or(`ticket_number.eq.${text},id.eq.${numericPart || 0}`)
         .single();
 
       ctx.session = {};
@@ -304,30 +335,7 @@ async function createTicket(ctx) {
       priority = 'High';
     }
 
-    const { data: lastTicket, error: lastTicketError } = await supabase
-      .from('tickets')
-      .select('ticket_number')
-      .not('ticket_number', 'is', null)
-      .order('id', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (lastTicketError) {
-      console.log('Last ticket fetch error:', lastTicketError);
-    }
-
-    let nextNumber = 1;
-
-    if (lastTicket && lastTicket.ticket_number) {
-      const parts = lastTicket.ticket_number.split('-');
-      const lastNum = parseInt(parts[1], 10);
-
-      if (!isNaN(lastNum)) {
-        nextNumber = lastNum + 1;
-      }
-    }
-
-    const ticketNumber = `HALA-${String(nextNumber).padStart(3, '0')}`;
+    const ticketNumber = await getNextTicketNumber();
 
     const details = {
       meter_id: ctx.session.meter_id,
@@ -427,7 +435,7 @@ app.get('/dashboard', async (req, res) => {
     const html = `
     <html>
     <head>
-      <title>Hala Home Dashboard</title>
+      <title>Hala Premium Dashboard</title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <style>
         * {
@@ -588,7 +596,7 @@ app.get('/dashboard', async (req, res) => {
     </head>
     <body>
       <div class="topbar">
-        <h1>Hala Home Support Dashboard</h1>
+        <h1>Hala Premium Support Dashboard</h1>
         <p>Live ticket overview and support operations center</p>
       </div>
 
