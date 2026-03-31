@@ -101,7 +101,13 @@ bot.action(/assign_(.+)/, async (ctx) => {
       `Priority: ${data.priority}\n` +
       `Assigned: ${agentName}`;
 
-    await ctx.editMessageText(newText, ticketButtons(ticketId));
+    try {
+      await ctx.editMessageCaption(newText, {
+        reply_markup: ticketButtons(ticketId).reply_markup
+      });
+    } catch {
+      await ctx.editMessageText(newText, ticketButtons(ticketId));
+    }
   } catch (err) {
     console.log('Assign action error:', err);
     await ctx.answerCbQuery('Assign failed');
@@ -142,7 +148,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
 
     const assignedText = data.assigned_agent || 'Not Assigned';
 
-    const newText =
+    const resolvedText =
       `Ticket Resolved\n\n` +
       `Ticket: ${data.id}\n` +
       `Type: ${data.disposition}\n` +
@@ -151,7 +157,11 @@ bot.action(/resolve_(.+)/, async (ctx) => {
       `Assigned: ${assignedText}\n` +
       `Status: Resolved`;
 
-    await ctx.editMessageText(newText);
+    try {
+      await ctx.editMessageCaption(resolvedText);
+    } catch {
+      await ctx.editMessageText(resolvedText);
+    }
   } catch (err) {
     console.log('Resolve action error:', err);
     await ctx.answerCbQuery('Resolve failed');
@@ -300,16 +310,30 @@ async function createTicket(ctx) {
 
     try {
       if (process.env.TEAM_CHAT_ID) {
-        await bot.telegram.sendMessage(
-          process.env.TEAM_CHAT_ID,
+        const caption =
           `New Ticket Created\n\n` +
-            `Ticket: ${data.id}\n` +
-            `Type: ${ctx.session.disposition}\n` +
-            `Meter ID: ${ctx.session.meter_id}\n` +
-            `Priority: ${priority}\n` +
-            `Assigned: Not Assigned`,
-          ticketButtons(data.id)
-        );
+          `Ticket: ${data.id}\n` +
+          `Type: ${ctx.session.disposition}\n` +
+          `Meter ID: ${ctx.session.meter_id}\n` +
+          `Priority: ${priority}\n` +
+          `Assigned: Not Assigned`;
+
+        if (ctx.session.photo_file_id) {
+          await bot.telegram.sendPhoto(
+            process.env.TEAM_CHAT_ID,
+            ctx.session.photo_file_id,
+            {
+              caption,
+              reply_markup: ticketButtons(data.id).reply_markup
+            }
+          );
+        } else {
+          await bot.telegram.sendMessage(
+            process.env.TEAM_CHAT_ID,
+            caption,
+            ticketButtons(data.id)
+          );
+        }
       }
     } catch (notifyErr) {
       console.log('Notification error:', notifyErr);
