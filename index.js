@@ -637,7 +637,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
 
     const uniqueAgents = [...new Set(
       tickets
-        .map(t => t.assigned_agent)
+        .map(t => t.assigned_agent || 'Not Assigned')
         .filter(v => v && v.trim() !== '')
     )].sort();
 
@@ -645,15 +645,18 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
     const byPriority = {};
     const byDay = {};
     const byAgent = {};
+    const byType = {};
 
     tickets.forEach(t => {
       const status = t.status || 'Pending';
       const priority = t.priority || 'Low';
       const agent = t.assigned_agent || 'Not Assigned';
+      const type = t.disposition || 'Unknown';
 
       byStatus[status] = (byStatus[status] || 0) + 1;
       byPriority[priority] = (byPriority[priority] || 0) + 1;
       byAgent[agent] = (byAgent[agent] || 0) + 1;
+      byType[type] = (byType[type] || 0) + 1;
 
       const createdAt = t.created_at
         ? new Date(t.created_at).toISOString().slice(0, 10)
@@ -671,9 +674,13 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
     const statusLabels = Object.keys(byStatus);
     const statusValues = statusLabels.map(k => byStatus[k]);
 
+    const typeLabels = Object.keys(byType);
+    const typeValues = typeLabels.map(k => byType[k]);
+
     const maxDayValue = Math.max(...dayValues, 1);
     const maxAgentValue = Math.max(...agentValues, 1);
     const maxStatusValue = Math.max(...statusValues, 1);
+    const maxTypeValue = Math.max(...typeValues, 1);
 
     let rows = '';
 
@@ -681,12 +688,15 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
       const status = t.status || 'Pending';
       const priority = t.priority || 'Low';
       const agent = t.assigned_agent || 'Not Assigned';
+      const type = t.disposition || 'Unknown';
 
       rows += `
-        <tr 
+        <tr
           data-status="${status}"
           data-priority="${priority}"
           data-agent="${agent}"
+          data-type="${type}"
+          data-created="${t.created_at || ''}"
         >
           <td>${t.ticket_number || '#' + t.id}</td>
           <td>${t.disposition || '-'}</td>
@@ -729,9 +739,33 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
       </div>
     `).join('');
 
+    const sortedTypeEntries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+
+    const typeBars = sortedTypeEntries.map(([label, value]) => `
+      <div class="bar-row">
+        <div class="bar-label">${label}</div>
+        <div class="bar-track">
+          <div class="bar-fill purple" style="width:${(value / maxTypeValue) * 100}%"></div>
+        </div>
+        <div class="bar-value">${value}</div>
+      </div>
+    `).join('');
+
     const agentOptions = uniqueAgents.map(agent => `
       <option value="${agent}">${agent}</option>
     `).join('');
+
+    const dashboardTickets = tickets.map(t => ({
+      ticket_number: t.ticket_number || `#${t.id}`,
+      disposition: t.disposition || 'Unknown',
+      status: t.status || 'Pending',
+      assigned_agent: t.assigned_agent || 'Not Assigned',
+      driver_id: t.driver_id || '-',
+      priority: t.priority || 'Low',
+      created_at: t.created_at || ''
+    }));
+
+    const ticketsJson = JSON.stringify(dashboardTickets).replace(/</g, '\\u003c');
 
     const html = `
     <html>
@@ -850,7 +884,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
         }
         .bar-row {
           display: grid;
-          grid-template-columns: 110px 1fr 40px;
+          grid-template-columns: 140px 1fr 40px;
           gap: 10px;
           align-items: center;
           margin-bottom: 12px;
@@ -880,6 +914,9 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
         }
         .bar-fill.orange {
           background: linear-gradient(90deg, #f59e0b, #fbbf24);
+        }
+        .bar-fill.purple {
+          background: linear-gradient(90deg, #7c3aed, #a78bfa);
         }
         .bar-value {
           font-size: 12px;
@@ -946,6 +983,12 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           color: #6b7280;
           font-size: 14px;
         }
+        .chart-subtitle {
+          font-size: 12px;
+          color: #6b7280;
+          margin-top: -8px;
+          margin-bottom: 16px;
+        }
         @media (max-width: 768px) {
           .topbar { padding: 20px; }
           .container { padding: 16px; }
@@ -1010,6 +1053,14 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
                 ${agentOptions}
               </select>
             </div>
+            <div class="filter-control">
+              <label>Type Count View</label>
+              <select id="typeCountFilter" onchange="renderTypeScoreBoard()">
+                <option value="overall">Overall</option>
+                <option value="today">Today</option>
+                <option value="this_week">This Week</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -1027,6 +1078,14 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           <div class="chart-card">
             <div class="chart-title">Status Breakdown</div>
             ${statusBars || '<div class="empty-note">No status data yet</div>'}
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-title">Type Score Board</div>
+            <div class="chart-subtitle">Use filters + Type Count View for reporting</div>
+            <div id="typeScoreBoard">
+              ${typeBars || '<div class="empty-note">No type data yet</div>'}
+            </div>
           </div>
         </div>
 
@@ -1054,6 +1113,124 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
       </div>
 
       <script>
+        const allTickets = ${ticketsJson};
+
+        function escapeHtml(value) {
+          return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        }
+
+        function startOfDay(date) {
+          const d = new Date(date);
+          d.setHours(0, 0, 0, 0);
+          return d;
+        }
+
+        function isToday(dateString) {
+          if (!dateString) return false;
+          const today = startOfDay(new Date());
+          const target = startOfDay(new Date(dateString));
+          return target.getTime() === today.getTime();
+        }
+
+        function getWeekStart(date) {
+          const d = new Date(date);
+          d.setHours(0, 0, 0, 0);
+          const day = d.getDay();
+          const diff = day === 0 ? -6 : 1 - day;
+          d.setDate(d.getDate() + diff);
+          return d;
+        }
+
+        function isThisWeek(dateString) {
+          if (!dateString) return false;
+          const currentWeekStart = getWeekStart(new Date());
+          const nextWeekStart = new Date(currentWeekStart);
+          nextWeekStart.setDate(currentWeekStart.getDate() + 7);
+
+          const target = new Date(dateString);
+          return target >= currentWeekStart && target < nextWeekStart;
+        }
+
+        function getCurrentFilters() {
+          return {
+            search: document.getElementById('searchInput').value.toLowerCase().trim(),
+            status: document.getElementById('statusFilter').value,
+            priority: document.getElementById('priorityFilter').value,
+            agent: document.getElementById('agentFilter').value,
+            typeCountView: document.getElementById('typeCountFilter').value
+          };
+        }
+
+        function matchesMainFilters(ticket, filters) {
+          const searchableText = [
+            ticket.ticket_number,
+            ticket.disposition,
+            ticket.status,
+            ticket.assigned_agent,
+            ticket.driver_id,
+            ticket.priority
+          ].join(' ').toLowerCase();
+
+          const matchesSearch = !filters.search || searchableText.includes(filters.search);
+          const matchesStatus = !filters.status || ticket.status === filters.status;
+          const matchesPriority = !filters.priority || ticket.priority === filters.priority;
+          const matchesAgent = !filters.agent || ticket.assigned_agent === filters.agent;
+
+          return matchesSearch && matchesStatus && matchesPriority && matchesAgent;
+        }
+
+        function matchesPeriod(ticket, period) {
+          if (period === 'today') {
+            return isToday(ticket.created_at);
+          }
+
+          if (period === 'this_week') {
+            return isThisWeek(ticket.created_at);
+          }
+
+          return true;
+        }
+
+        function renderTypeScoreBoard() {
+          const filters = getCurrentFilters();
+
+          const filteredTickets = allTickets.filter(ticket =>
+            matchesMainFilters(ticket, filters) && matchesPeriod(ticket, filters.typeCountView)
+          );
+
+          const byType = {};
+
+          filteredTickets.forEach(ticket => {
+            const type = ticket.disposition || 'Unknown';
+            byType[type] = (byType[type] || 0) + 1;
+          });
+
+          const entries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+          const container = document.getElementById('typeScoreBoard');
+
+          if (!entries.length) {
+            container.innerHTML = '<div class="empty-note">No type data for selected filters</div>';
+            return;
+          }
+
+          const maxValue = Math.max(...entries.map(item => item[1]), 1);
+
+          container.innerHTML = entries.map(([label, value]) => \`
+            <div class="bar-row">
+              <div class="bar-label">\${escapeHtml(label)}</div>
+              <div class="bar-track">
+                <div class="bar-fill purple" style="width:\${(value / maxValue) * 100}%"></div>
+              </div>
+              <div class="bar-value">\${value}</div>
+            </div>
+          \`).join('');
+        }
+
         function filterTable() {
           const search = document.getElementById('searchInput').value.toLowerCase();
           const status = document.getElementById('statusFilter').value;
@@ -1078,7 +1255,11 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
                 ? ''
                 : 'none';
           });
+
+          renderTypeScoreBoard();
         }
+
+        renderTypeScoreBoard();
       </script>
     </body>
     </html>
