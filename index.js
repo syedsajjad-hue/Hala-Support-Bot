@@ -674,13 +674,10 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
     const statusLabels = Object.keys(byStatus);
     const statusValues = statusLabels.map(k => byStatus[k]);
 
-    const typeLabels = Object.keys(byType);
-    const typeValues = typeLabels.map(k => byType[k]);
-
     const maxDayValue = Math.max(...dayValues, 1);
     const maxAgentValue = Math.max(...agentValues, 1);
     const maxStatusValue = Math.max(...statusValues, 1);
-    const maxTypeValue = Math.max(...typeValues, 1);
+    const maxTypeValue = Math.max(...Object.values(byType), 1);
 
     let rows = '';
 
@@ -853,7 +850,8 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           color: #4b5563;
         }
         .filter-control input,
-        .filter-control select {
+        .filter-control select,
+        .filter-control button {
           padding: 12px 14px;
           border: 1px solid #c7d7ff;
           border-radius: 12px;
@@ -865,6 +863,17 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
         .filter-control select:focus {
           border-color: #3886fc;
           box-shadow: 0 0 0 3px rgba(56, 134, 252, 0.12);
+        }
+        .export-btn {
+          background: linear-gradient(135deg, #10b981, #059669);
+          color: white;
+          border: none;
+          cursor: pointer;
+          font-weight: 700;
+          margin-top: auto;
+        }
+        .export-btn:hover {
+          opacity: 0.95;
         }
         .charts-grid {
           display: grid;
@@ -1055,11 +1064,23 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
             </div>
             <div class="filter-control">
               <label>Type Count View</label>
-              <select id="typeCountFilter" onchange="renderTypeScoreBoard()">
+              <select id="typeCountFilter" onchange="filterTable()">
                 <option value="overall">Overall</option>
                 <option value="today">Today</option>
                 <option value="this_week">This Week</option>
               </select>
+            </div>
+            <div class="filter-control">
+              <label>From Date</label>
+              <input type="date" id="fromDate" onchange="filterTable()" />
+            </div>
+            <div class="filter-control">
+              <label>To Date</label>
+              <input type="date" id="toDate" onchange="filterTable()" />
+            </div>
+            <div class="filter-control">
+              <label>Export Report</label>
+              <button class="export-btn" onclick="exportReport()">Export CSV</button>
             </div>
           </div>
         </div>
@@ -1082,7 +1103,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
 
           <div class="chart-card">
             <div class="chart-title">Type Score Board</div>
-            <div class="chart-subtitle">Use filters + Type Count View for reporting</div>
+            <div class="chart-subtitle">Use all filters, type view, and date range for reporting</div>
             <div id="typeScoreBoard">
               ${typeBars || '<div class="empty-note">No type data yet</div>'}
             </div>
@@ -1130,6 +1151,12 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           return d;
         }
 
+        function endOfDay(date) {
+          const d = new Date(date);
+          d.setHours(23, 59, 59, 999);
+          return d;
+        }
+
         function isToday(dateString) {
           if (!dateString) return false;
           const today = startOfDay(new Date());
@@ -1156,13 +1183,33 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           return target >= currentWeekStart && target < nextWeekStart;
         }
 
+        function inSelectedDateRange(dateString, fromDate, toDate) {
+          if (!dateString) return false;
+
+          const target = new Date(dateString);
+
+          if (fromDate) {
+            const from = startOfDay(new Date(fromDate));
+            if (target < from) return false;
+          }
+
+          if (toDate) {
+            const to = endOfDay(new Date(toDate));
+            if (target > to) return false;
+          }
+
+          return true;
+        }
+
         function getCurrentFilters() {
           return {
             search: document.getElementById('searchInput').value.toLowerCase().trim(),
             status: document.getElementById('statusFilter').value,
             priority: document.getElementById('priorityFilter').value,
             agent: document.getElementById('agentFilter').value,
-            typeCountView: document.getElementById('typeCountFilter').value
+            typeCountView: document.getElementById('typeCountFilter').value,
+            fromDate: document.getElementById('fromDate').value,
+            toDate: document.getElementById('toDate').value
           };
         }
 
@@ -1180,11 +1227,12 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           const matchesStatus = !filters.status || ticket.status === filters.status;
           const matchesPriority = !filters.priority || ticket.priority === filters.priority;
           const matchesAgent = !filters.agent || ticket.assigned_agent === filters.agent;
+          const matchesDateRange = inSelectedDateRange(ticket.created_at, filters.fromDate, filters.toDate);
 
-          return matchesSearch && matchesStatus && matchesPriority && matchesAgent;
+          return matchesSearch && matchesStatus && matchesPriority && matchesAgent && matchesDateRange;
         }
 
-        function matchesPeriod(ticket, period) {
+        function matchesTypePeriod(ticket, period) {
           if (period === 'today') {
             return isToday(ticket.created_at);
           }
@@ -1196,13 +1244,16 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
           return true;
         }
 
-        function renderTypeScoreBoard() {
+        function getFilteredTicketsForScoreboard() {
           const filters = getCurrentFilters();
 
-          const filteredTickets = allTickets.filter(ticket =>
-            matchesMainFilters(ticket, filters) && matchesPeriod(ticket, filters.typeCountView)
+          return allTickets.filter(ticket =>
+            matchesMainFilters(ticket, filters) && matchesTypePeriod(ticket, filters.typeCountView)
           );
+        }
 
+        function renderTypeScoreBoard() {
+          const filteredTickets = getFilteredTicketsForScoreboard();
           const byType = {};
 
           filteredTickets.forEach(ticket => {
@@ -1232,11 +1283,7 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
         }
 
         function filterTable() {
-          const search = document.getElementById('searchInput').value.toLowerCase();
-          const status = document.getElementById('statusFilter').value;
-          const priority = document.getElementById('priorityFilter').value;
-          const agent = document.getElementById('agentFilter').value;
-
+          const filters = getCurrentFilters();
           const rows = document.querySelectorAll('#ticketTable tbody tr');
 
           rows.forEach(row => {
@@ -1244,19 +1291,82 @@ app.get('/dashboard', protectDashboard, async (req, res) => {
             const rowStatus = row.getAttribute('data-status');
             const rowPriority = row.getAttribute('data-priority');
             const rowAgent = row.getAttribute('data-agent');
+            const rowCreated = row.getAttribute('data-created');
 
-            const matchesSearch = text.includes(search);
-            const matchesStatus = !status || rowStatus === status;
-            const matchesPriority = !priority || rowPriority === priority;
-            const matchesAgent = !agent || rowAgent === agent;
+            const matchesSearch = !filters.search || text.includes(filters.search);
+            const matchesStatus = !filters.status || rowStatus === filters.status;
+            const matchesPriority = !filters.priority || rowPriority === filters.priority;
+            const matchesAgent = !filters.agent || rowAgent === filters.agent;
+            const matchesDateRange = inSelectedDateRange(rowCreated, filters.fromDate, filters.toDate);
 
             row.style.display =
-              matchesSearch && matchesStatus && matchesPriority && matchesAgent
+              matchesSearch && matchesStatus && matchesPriority && matchesAgent && matchesDateRange
                 ? ''
                 : 'none';
           });
 
           renderTypeScoreBoard();
+        }
+
+        function csvEscape(value) {
+          const stringValue = String(value ?? '');
+          if (stringValue.includes('"') || stringValue.includes(',') || stringValue.includes('\\n')) {
+            return '"' + stringValue.replace(/"/g, '""') + '"';
+          }
+          return stringValue;
+        }
+
+        function exportReport() {
+          const filters = getCurrentFilters();
+
+          const filteredTickets = allTickets.filter(ticket => matchesMainFilters(ticket, filters));
+
+          if (!filteredTickets.length) {
+            alert('No data found for selected filters.');
+            return;
+          }
+
+          const rows = [
+            [
+              'Ticket',
+              'Type',
+              'Status',
+              'Agent',
+              'Meter',
+              'Priority',
+              'Created At'
+            ]
+          ];
+
+          filteredTickets.forEach(ticket => {
+            rows.push([
+              ticket.ticket_number,
+              ticket.disposition,
+              ticket.status,
+              ticket.assigned_agent,
+              ticket.driver_id,
+              ticket.priority,
+              ticket.created_at ? new Date(ticket.created_at).toLocaleString() : ''
+            ]);
+          });
+
+          const csvContent = rows
+            .map(row => row.map(csvEscape).join(','))
+            .join('\\n');
+
+          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+
+          const today = new Date();
+          const fileDate = today.toISOString().slice(0, 10);
+
+          link.href = url;
+          link.setAttribute('download', \`hala-ticket-report-\${fileDate}.csv\`);
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
         }
 
         renderTypeScoreBoard();
