@@ -12,8 +12,8 @@ const PORT = process.env.PORT || 10000;
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://hala-support-bot.onrender.com';
 const WEBHOOK_PATH = '/telegram-webhook';
 
-const DASHBOARD_USER = 'admin';
-const DASHBOARD_PASS = 'admin';
+const DASHBOARD_USER = process.env.DASHBOARD_USER || 'admin';
+const DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin';
 
 const ALERT_AFTER_MINUTES = 15;
 const REPEAT_ALERT_MINUTES = 5;
@@ -55,10 +55,55 @@ const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
 
 bot.use(session());
 
+// ================= KEYBOARDS =================
+
+function mainMenuKeyboard() {
+  return {
+    reply_markup: {
+      keyboard: [
+        ['Create Ticket', 'Check Ticket Status']
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+      persistent: true
+    }
+  };
+}
+
+function issueTypeKeyboard() {
+  return {
+    reply_markup: {
+      keyboard: [
+        ['Payment Issue', 'Account Block'],
+        ['Stuck Booking', 'Device Issue'],
+        ['Back', 'Cancel']
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+      persistent: true
+    }
+  };
+}
+
+function flowKeyboard() {
+  return {
+    reply_markup: {
+      keyboard: [['Back', 'Cancel']],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+      persistent: true
+    }
+  };
+}
+
 // ================= HELPERS =================
 
 function isValidMeterId(value) {
-  return /^\d{7}$/.test(value);
+  return /^\d{7}$/.test(String(value || '').trim());
+}
+
+function sanitizeText(value) {
+  return String(value || '').trim();
 }
 
 function ticketButtons(ticketId) {
@@ -108,6 +153,16 @@ function protectDashboard(req, res, next) {
 
   res.setHeader('WWW-Authenticate', 'Basic realm="Hala Dashboard"');
   return res.status(401).send('Invalid credentials.');
+}
+
+async function showMainMenu(ctx, message = 'Welcome to Hala Driver Support Bot') {
+  ctx.session = {};
+  return ctx.reply(message, mainMenuKeyboard());
+}
+
+async function showIssueMenu(ctx) {
+  ctx.session = { step: 'disposition' };
+  return ctx.reply('Select issue type:', issueTypeKeyboard());
 }
 
 async function getNextTicketNumber() {
@@ -323,30 +378,72 @@ async function checkUnresolvedTickets() {
 
 // ================= BOT COMMANDS =================
 
-bot.start((ctx) => {
-  ctx.session = {};
-  return ctx.reply(
-    'Welcome to Hala Driver Support Bot',
-    Markup.keyboard([
-      ['Create Ticket', 'Check Ticket Status']
-    ]).resize()
-  );
+bot.start(async (ctx) => {
+  return showMainMenu(ctx, 'Welcome to Hala Driver Support Bot');
 });
 
-bot.hears('Create Ticket', (ctx) => {
-  ctx.session = { step: 'disposition' };
-  return ctx.reply(
-    'Select issue type:',
-    Markup.keyboard([
-      ['Payment Issue', 'Account Block'],
-      ['Stuck Booking', 'Device Issue']
-    ]).resize()
-  );
+bot.command('menu', async (ctx) => {
+  return showMainMenu(ctx, 'Main menu');
 });
 
-bot.hears('Check Ticket Status', (ctx) => {
+bot.hears(/^cancel$/i, async (ctx) => {
+  return showMainMenu(ctx, 'Cancelled. Back to main menu.');
+});
+
+bot.hears(/^back$/i, async (ctx) => {
+  if (!ctx.session || !ctx.session.step) {
+    return showMainMenu(ctx, 'Main menu');
+  }
+
+  const step = ctx.session.step;
+
+  if (step === 'disposition' || step === 'check_ticket_number') {
+    return showMainMenu(ctx, 'Main menu');
+  }
+
+  if (step === 'meter_id') {
+    return showIssueMenu(ctx);
+  }
+
+  if (step === 'fare' || step === 'car_side_number' || step === 'device_id') {
+    ctx.session.step = 'meter_id';
+    return ctx.reply('Enter 7-digit Meter ID:', flowKeyboard());
+  }
+
+  if (step === 'time') {
+    ctx.session.step = 'fare';
+    return ctx.reply('Enter Fare:', flowKeyboard());
+  }
+
+  if (step === 'awaiting_photo') {
+    ctx.session.step = 'time';
+    return ctx.reply('Enter Time:', flowKeyboard());
+  }
+
+  if (step === 'description') {
+    if (ctx.session.disposition === 'Payment Issue') {
+      ctx.session.step = 'awaiting_photo';
+      return ctx.reply('Upload photo now:', flowKeyboard());
+    }
+
+    if (ctx.session.disposition === 'Device Issue') {
+      ctx.session.step = 'device_id';
+      return ctx.reply('Enter Device ID:', flowKeyboard());
+    }
+
+    return ctx.reply('Going back.', flowKeyboard());
+  }
+
+  return showMainMenu(ctx, 'Main menu');
+});
+
+bot.hears(/^create ticket$/i, async (ctx) => {
+  return showIssueMenu(ctx);
+});
+
+bot.hears(/^check ticket status$/i, async (ctx) => {
   ctx.session = { step: 'check_ticket_number' };
-  return ctx.reply('Please enter ticket number:');
+  return ctx.reply('Please enter ticket number:', flowKeyboard());
 });
 
 bot.on('photo', async (ctx) => {
@@ -357,7 +454,7 @@ bot.on('photo', async (ctx) => {
     ctx.session.photo_file_id = photo.file_id;
     ctx.session.step = 'description';
 
-    return ctx.reply('Enter description:');
+    return ctx.reply('Enter description:', flowKeyboard());
   } catch (err) {
     console.log('Photo error:', err);
     return ctx.reply('Error receiving photo');
@@ -457,9 +554,19 @@ bot.action(/resolve_(.+)/, async (ctx) => {
 
 bot.on('text', async (ctx) => {
   try {
-    if (!ctx.session || !ctx.session.step) return;
+    if (!ctx.session) {
+      ctx.session = {};
+    }
 
-    const text = ctx.message.text.trim();
+    if (!ctx.session.step) {
+      return;
+    }
+
+    const text = sanitizeText(ctx.message.text);
+
+    if (/^cancel$/i.test(text) || /^back$/i.test(text)) {
+      return;
+    }
 
     if (ctx.session.step === 'check_ticket_number') {
       const numericPart = text.replace(/\D/g, '');
@@ -473,34 +580,41 @@ bot.on('text', async (ctx) => {
       ctx.session = {};
 
       if (error || !data) {
-        return ctx.reply('Ticket not found.');
+        return ctx.reply('Ticket not found.', mainMenuKeyboard());
       }
 
-      return ctx.reply(`Ticket: ${data.ticket_number || data.id}`);
+      return ctx.reply(
+        `Ticket: ${data.ticket_number || data.id}\n` +
+        `Type: ${data.disposition || '-'}\n` +
+        `Status: ${data.status || '-'}\n` +
+        `Priority: ${data.priority || '-'}\n` +
+        `Assigned: ${data.assigned_agent || 'Not Assigned'}`,
+        mainMenuKeyboard()
+      );
     }
 
     if (ctx.session.step === 'disposition') {
       const valid = ['Payment Issue', 'Account Block', 'Stuck Booking', 'Device Issue'];
 
       if (!valid.includes(text)) {
-        return ctx.reply('Please select issue type using buttons.');
+        return ctx.reply('Please select issue type using buttons.', issueTypeKeyboard());
       }
 
       ctx.session.disposition = text;
       ctx.session.step = 'meter_id';
-      return ctx.reply('Enter 7-digit Meter ID:');
+      return ctx.reply('Enter 7-digit Meter ID:', flowKeyboard());
     }
 
     if (ctx.session.step === 'meter_id') {
       if (!isValidMeterId(text)) {
-        return ctx.reply('Enter valid 7 digit Meter ID');
+        return ctx.reply('Enter valid 7 digit Meter ID', flowKeyboard());
       }
 
       ctx.session.meter_id = text;
 
       if (ctx.session.disposition === 'Payment Issue') {
         ctx.session.step = 'fare';
-        return ctx.reply('Enter Fare:');
+        return ctx.reply('Enter Fare:', flowKeyboard());
       }
 
       if (ctx.session.disposition === 'Account Block') {
@@ -509,25 +623,25 @@ bot.on('text', async (ctx) => {
 
       if (ctx.session.disposition === 'Stuck Booking') {
         ctx.session.step = 'car_side_number';
-        return ctx.reply('Enter Car Side Number:');
+        return ctx.reply('Enter Car Side Number:', flowKeyboard());
       }
 
       if (ctx.session.disposition === 'Device Issue') {
         ctx.session.step = 'device_id';
-        return ctx.reply('Enter Device ID:');
+        return ctx.reply('Enter Device ID:', flowKeyboard());
       }
     }
 
     if (ctx.session.step === 'fare') {
       ctx.session.fare = text;
       ctx.session.step = 'time';
-      return ctx.reply('Enter Time:');
+      return ctx.reply('Enter Time:', flowKeyboard());
     }
 
     if (ctx.session.step === 'time') {
       ctx.session.time = text;
       ctx.session.step = 'awaiting_photo';
-      return ctx.reply('Upload photo now:');
+      return ctx.reply('Upload photo now:', flowKeyboard());
     }
 
     if (ctx.session.step === 'car_side_number') {
@@ -538,7 +652,7 @@ bot.on('text', async (ctx) => {
     if (ctx.session.step === 'device_id') {
       ctx.session.device_id = text;
       ctx.session.step = 'description';
-      return ctx.reply('Enter short description:');
+      return ctx.reply('Enter short description:', flowKeyboard());
     }
 
     if (ctx.session.step === 'description') {
@@ -548,7 +662,7 @@ bot.on('text', async (ctx) => {
   } catch (err) {
     console.log('Text error:', err);
     ctx.session = {};
-    return ctx.reply('Something went wrong');
+    return ctx.reply('Something went wrong', mainMenuKeyboard());
   }
 });
 
@@ -600,7 +714,7 @@ async function createTicket(ctx) {
     if (error) {
       console.log('Database error:', error);
       ctx.session = {};
-      return ctx.reply('Database error');
+      return ctx.reply('Database error', mainMenuKeyboard());
     }
 
     await appendTicketToGoogleSheet(data);
@@ -624,11 +738,11 @@ async function createTicket(ctx) {
     }
 
     ctx.session = {};
-    return ctx.reply(`✅ Ticket created: ${data.ticket_number}`);
+    return ctx.reply(`✅ Ticket created: ${data.ticket_number}`, mainMenuKeyboard());
   } catch (err) {
     console.log('Create ticket error:', err);
     ctx.session = {};
-    return ctx.reply('Error saving ticket');
+    return ctx.reply('Error saving ticket', mainMenuKeyboard());
   }
 }
 
