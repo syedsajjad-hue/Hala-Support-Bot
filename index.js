@@ -14,7 +14,7 @@ const WEBHOOK_PATH = '/telegram-webhook';
 
 const DASHBOARD_USER = 'admin';
 const DASHBOARD_PASS = 'admin';
-const ALERT_AFTER_MINUTES = 30;
+const ALERT_AFTER_MINUTES = 10;
 
 if (!process.env.BOT_TOKEN) {
   throw new Error('BOT_TOKEN is missing');
