@@ -67,7 +67,23 @@ function issueTypeButtons() {
       Markup.button.callback('Device Issue', 'disp_device_issue')
     ],
     [
+      Markup.button.callback('Profile Update', 'disp_profile_update')
+    ],
+    [
       Markup.button.callback('Back', 'nav_back_main'),
+      Markup.button.callback('Cancel', 'nav_cancel')
+    ]
+  ]);
+}
+
+function profileUpdateButtons() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Number Update', 'profile_number_update'),
+      Markup.button.callback('Profile Picture Update', 'profile_picture_update')
+    ],
+    [
+      Markup.button.callback('Back', 'menu_create_ticket'),
       Markup.button.callback('Cancel', 'nav_cancel')
     ]
   ]);
@@ -99,6 +115,10 @@ function isValidMeterId(value) {
 
 function sanitizeText(value) {
   return String(value || '').trim();
+}
+
+function isValidMobileNumber(value) {
+  return /^[0-9+\-\s]{7,20}$/.test(String(value || '').trim());
 }
 
 function getStatusBadge(status) {
@@ -461,6 +481,51 @@ bot.action('disp_device_issue', async (ctx) => {
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
+bot.action('disp_profile_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    disposition: 'Profile Update',
+    step: 'profile_update_type'
+  };
+
+  return ctx.editMessageText('Select profile update type:', profileUpdateButtons());
+});
+
+bot.action('profile_number_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    ...ctx.session,
+    disposition: 'Profile Update',
+    profile_update_type: 'Number Update',
+    step: 'meter_id'
+  };
+
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
+bot.action('profile_picture_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    ...ctx.session,
+    disposition: 'Profile Update',
+    profile_update_type: 'Profile Picture Update',
+    step: 'meter_id'
+  };
+
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
 // ================= OPTIONAL PHOTO SKIP =================
 
 bot.action('skip_photo', async (ctx) => {
@@ -484,13 +549,21 @@ bot.action('skip_photo', async (ctx) => {
 
 bot.on('photo', async (ctx) => {
   try {
-    if (!ctx.session || ctx.session.step !== 'awaiting_photo') return;
+    if (!ctx.session) return;
 
     const photo = ctx.message.photo[ctx.message.photo.length - 1];
-    ctx.session.photo_file_id = photo.file_id;
-    ctx.session.step = 'description';
 
-    return ctx.reply('Photo received. Enter description:');
+    if (ctx.session.step === 'awaiting_photo') {
+      ctx.session.photo_file_id = photo.file_id;
+      ctx.session.step = 'description';
+      return ctx.reply('Photo received. Enter description:');
+    }
+
+    if (ctx.session.step === 'awaiting_profile_picture') {
+      ctx.session.photo_file_id = photo.file_id;
+      ctx.session.description = 'Profile Update Request - Profile Picture Update';
+      return createTicket(ctx);
+    }
   } catch (err) {
     console.log('Photo error:', err);
     return ctx.reply('Error receiving photo');
@@ -656,6 +729,18 @@ bot.on('text', async (ctx) => {
         ctx.session.step = 'device_id';
         return ctx.reply('Enter Device ID:');
       }
+
+      if (ctx.session.disposition === 'Profile Update') {
+        if (ctx.session.profile_update_type === 'Number Update') {
+          ctx.session.step = 'mobile_number';
+          return ctx.reply('Enter Mobile Number:');
+        }
+
+        if (ctx.session.profile_update_type === 'Profile Picture Update') {
+          ctx.session.step = 'awaiting_profile_picture';
+          return ctx.reply('Upload picture with White Background and in Uniform.');
+        }
+      }
     }
 
     if (ctx.session.step === 'fare') {
@@ -679,6 +764,16 @@ bot.on('text', async (ctx) => {
       ctx.session.device_id = text;
       ctx.session.step = 'description';
       return ctx.reply('Enter short description:');
+    }
+
+    if (ctx.session.step === 'mobile_number') {
+      if (!isValidMobileNumber(text)) {
+        return ctx.reply('Enter valid Mobile Number');
+      }
+
+      ctx.session.mobile_number = text;
+      ctx.session.description = `Profile Update Request - Number Update\nMobile Number: ${text}`;
+      return createTicket(ctx);
     }
 
     if (ctx.session.step === 'description') {
@@ -716,8 +811,15 @@ async function createTicket(ctx) {
         fare: ctx.session.fare || null,
         time: ctx.session.time || null,
         car_side_number: ctx.session.car_side_number || null,
-        device_id: ctx.session.device_id || null
+        device_id: ctx.session.device_id || null,
+        profile_update_type: ctx.session.profile_update_type || null,
+        mobile_number: ctx.session.mobile_number || null
       };
+
+      const finalDisposition =
+        ctx.session.disposition === 'Profile Update' && ctx.session.profile_update_type
+          ? `Profile Update - ${ctx.session.profile_update_type}`
+          : ctx.session.disposition;
 
       const result = await supabase
         .from('tickets')
@@ -726,7 +828,7 @@ async function createTicket(ctx) {
             ticket_number: ticketNumber,
             telegram_user_id: String(ctx.from.id),
             driver_id: ctx.session.meter_id,
-            disposition: ctx.session.disposition,
+            disposition: finalDisposition,
             description: ctx.session.description || null,
             details_json: details,
             photo_file_id: ctx.session.photo_file_id || null,
@@ -767,17 +869,32 @@ async function createTicket(ctx) {
 
     try {
       if (process.env.TEAM_CHAT_ID) {
-        await bot.telegram.sendMessage(
-          process.env.TEAM_CHAT_ID,
+        const ticketMessage =
           `🆕 New Ticket Created\n\n` +
-            `Ticket: ${data.ticket_number}\n` +
-            `Type: ${ctx.session.disposition}\n` +
-            `Meter ID: ${ctx.session.meter_id}\n` +
-            `Priority: ${priority}\n` +
-            `Assigned: Not Assigned\n` +
-            `Status: 🟡 Pending`,
-          ticketButtons(data.id)
-        );
+          `Ticket: ${data.ticket_number}\n` +
+          `Type: ${data.disposition}\n` +
+          `Meter ID: ${ctx.session.meter_id}\n` +
+          `${ctx.session.mobile_number ? `Mobile Number: ${ctx.session.mobile_number}\n` : ''}` +
+          `Priority: ${priority}\n` +
+          `Assigned: Not Assigned\n` +
+          `Status: 🟡 Pending`;
+
+        if (ctx.session.photo_file_id) {
+          await bot.telegram.sendPhoto(
+            process.env.TEAM_CHAT_ID,
+            ctx.session.photo_file_id,
+            {
+              caption: ticketMessage,
+              reply_markup: ticketButtons(data.id).reply_markup
+            }
+          );
+        } else {
+          await bot.telegram.sendMessage(
+            process.env.TEAM_CHAT_ID,
+            ticketMessage,
+            ticketButtons(data.id)
+          );
+        }
       }
     } catch (notifyErr) {
       console.log('Notification error:', notifyErr);
