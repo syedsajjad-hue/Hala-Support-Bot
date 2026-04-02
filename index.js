@@ -306,6 +306,7 @@ async function checkUnresolvedTickets() {
       const { error: updateError } = await supabase
         .from('tickets')
         .update({
+          alert_sent: true,
           last_alert_at: now.toISOString(),
           updated_at: now.toISOString()
         })
@@ -365,6 +366,8 @@ bot.on('photo', async (ctx) => {
 
 bot.action(/assign_(.+)/, async (ctx) => {
   try {
+    await ctx.answerCbQuery('Processing...');
+
     const ticketId = ctx.match[1];
     const agentName = ctx.from.username
       ? `@${ctx.from.username}`
@@ -382,11 +385,8 @@ bot.action(/assign_(.+)/, async (ctx) => {
 
     if (error || !data) {
       console.log('Assign button error:', error || 'No matching ticket found');
-      await ctx.answerCbQuery('Ticket not found or already removed');
       return;
     }
-
-    await ctx.answerCbQuery('Ticket assigned');
 
     const newText =
       `📝 Ticket Updated\n\n` +
@@ -400,12 +400,13 @@ bot.action(/assign_(.+)/, async (ctx) => {
     await ctx.editMessageText(newText, ticketButtons(ticketId));
   } catch (err) {
     console.log('Assign action error:', err);
-    await ctx.answerCbQuery('Assign failed');
   }
 });
 
 bot.action(/resolve_(.+)/, async (ctx) => {
   try {
+    await ctx.answerCbQuery('Processing...');
+
     const ticketId = ctx.match[1];
 
     const { data, error } = await supabase
@@ -423,7 +424,6 @@ bot.action(/resolve_(.+)/, async (ctx) => {
 
     if (error || !data) {
       console.log('Resolve button error:', error || 'No matching ticket found');
-      await ctx.answerCbQuery('Ticket not found or already removed');
       return;
     }
 
@@ -437,8 +437,6 @@ bot.action(/resolve_(.+)/, async (ctx) => {
     } catch (notifyErr) {
       console.log('Driver notify error:', notifyErr);
     }
-
-    await ctx.answerCbQuery('Ticket resolved');
 
     const assignedText = data.assigned_agent || 'Not Assigned';
 
@@ -454,7 +452,6 @@ bot.action(/resolve_(.+)/, async (ctx) => {
     await ctx.editMessageText(newText);
   } catch (err) {
     console.log('Resolve action error:', err);
-    await ctx.answerCbQuery('Resolve failed');
   }
 });
 
