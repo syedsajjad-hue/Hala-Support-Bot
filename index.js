@@ -14,7 +14,9 @@ const WEBHOOK_PATH = '/telegram-webhook';
 
 const DASHBOARD_USER = 'admin';
 const DASHBOARD_PASS = 'admin';
-const ALERT_AFTER_MINUTES = 10;
+
+const ALERT_AFTER_MINUTES = 15;
+const REPEAT_ALERT_MINUTES = 5;
 
 if (!process.env.BOT_TOKEN) {
   throw new Error('BOT_TOKEN is missing');
@@ -245,6 +247,9 @@ async function sendUnresolvedAlert(ticket) {
     if (!process.env.TEAM_CHAT_ID) return;
 
     const assignedText = ticket.assigned_agent || 'Not Assigned';
+    const minutesOpen = Math.floor(
+      (Date.now() - new Date(ticket.created_at).getTime()) / 60000
+    );
 
     await bot.telegram.sendMessage(
       process.env.TEAM_CHAT_ID,
@@ -255,7 +260,8 @@ async function sendUnresolvedAlert(ticket) {
         `Priority: ${ticket.priority || '-'}\n` +
         `Assigned: ${assignedText}\n` +
         `Status: 🟡 Pending\n` +
-        `Alert: Not resolved in ${ALERT_AFTER_MINUTES} minutes`
+        `Open For: ${minutesOpen} minutes\n` +
+        `Reminder: Still not resolved`
     );
   } catch (err) {
     console.log('Unresolved alert send error:', err);
@@ -264,15 +270,21 @@ async function sendUnresolvedAlert(ticket) {
 
 async function checkUnresolvedTickets() {
   try {
-    const alertBefore = new Date(
-      Date.now() - ALERT_AFTER_MINUTES * 60 * 1000
+    const now = new Date();
+
+    const firstAlertThreshold = new Date(
+      now.getTime() - ALERT_AFTER_MINUTES * 60 * 1000
+    ).toISOString();
+
+    const repeatAlertThreshold = new Date(
+      now.getTime() - REPEAT_ALERT_MINUTES * 60 * 1000
     ).toISOString();
 
     const { data, error } = await supabase
       .from('tickets')
       .select('*')
       .neq('status', 'Resolved')
-      .lte('created_at', alertBefore);
+      .lte('created_at', firstAlertThreshold);
 
     if (error) {
       console.log('Unresolved ticket query error:', error);
@@ -280,17 +292,28 @@ async function checkUnresolvedTickets() {
     }
 
     for (const ticket of data || []) {
-      if (ticket.alert_sent === true) continue;
+      const shouldSendFirstAlert = !ticket.last_alert_at;
+      const shouldSendRepeatAlert =
+        ticket.last_alert_at &&
+        new Date(ticket.last_alert_at).toISOString() <= repeatAlertThreshold;
+
+      if (!shouldSendFirstAlert && !shouldSendRepeatAlert) {
+        continue;
+      }
 
       await sendUnresolvedAlert(ticket);
 
-      await supabase
+      const { error: updateError } = await supabase
         .from('tickets')
         .update({
-          alert_sent: true,
-          updated_at: new Date().toISOString()
+          last_alert_at: now.toISOString(),
+          updated_at: now.toISOString()
         })
         .eq('id', ticket.id);
+
+      if (updateError) {
+        console.log('Failed updating last_alert_at:', updateError);
+      }
     }
   } catch (err) {
     console.log('checkUnresolvedTickets error:', err);
@@ -391,6 +414,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
         status: 'Resolved',
         resolved_at: new Date().toISOString(),
         alert_sent: false,
+        last_alert_at: null,
         updated_at: new Date().toISOString()
       })
       .eq('id', ticketId)
@@ -569,6 +593,7 @@ async function createTicket(ctx) {
           status: 'Pending',
           assigned_agent: null,
           alert_sent: false,
+          last_alert_at: null,
           updated_at: new Date().toISOString()
         }
       ])
