@@ -357,7 +357,8 @@ bot.command('menu', async (ctx) => {
 });
 
 bot.command('cancel', async (ctx) => {
-  return sendMainMenu(ctx, 'Cancelled. Back to main menu.');
+  ctx.session = {};
+  return ctx.reply('Cancelled.\n\nTo start again, send /start');
 });
 
 // ================= MENU ACTIONS =================
@@ -394,7 +395,8 @@ bot.action('nav_cancel', async (ctx) => {
     await ctx.deleteMessage();
   } catch (e) {}
 
-  return sendMainMenu(ctx, 'Cancelled. Back to main menu.');
+  ctx.session = {};
+  return ctx.reply('Cancelled.\n\nTo start again, send /start');
 });
 
 // ================= DISPOSITION ACTIONS =================
@@ -616,7 +618,7 @@ bot.on('text', async (ctx) => {
       ctx.session = {};
 
       if (error || !data) {
-        return ctx.reply('Ticket not found.', mainMenuButtons());
+        return ctx.reply('Ticket not found.\n\nTo try again, send /start');
       }
 
       return ctx.reply(
@@ -624,8 +626,8 @@ bot.on('text', async (ctx) => {
         `Type: ${data.disposition || '-'}\n` +
         `Status: ${data.status || '-'}\n` +
         `Priority: ${data.priority || '-'}\n` +
-        `Assigned: ${data.assigned_agent || 'Not Assigned'}`,
-        mainMenuButtons()
+        `Assigned: ${data.assigned_agent || 'Not Assigned'}\n\n` +
+        `To start again, send /start`
       );
     }
 
@@ -686,7 +688,7 @@ bot.on('text', async (ctx) => {
   } catch (err) {
     console.log('Text error:', err);
     ctx.session = {};
-    return ctx.reply('Something went wrong', mainMenuButtons());
+    return ctx.reply('Something went wrong.\n\nTo start again, send /start');
   }
 });
 
@@ -758,7 +760,7 @@ async function createTicket(ctx) {
     if (error) {
       console.log('Database error FULL:', JSON.stringify(error, null, 2));
       ctx.session = {};
-      return ctx.reply(`Database error: ${error.message}`, mainMenuButtons());
+      return ctx.reply(`Database error: ${error.message}`);
     }
 
     await appendTicketToGoogleSheet(data);
@@ -783,13 +785,12 @@ async function createTicket(ctx) {
 
     ctx.session = {};
     return ctx.reply(
-      `✅ Ticket created successfully\nTicket Number: ${data.ticket_number}`,
-      mainMenuButtons()
+      `✅ Ticket created successfully\nTicket Number: ${data.ticket_number}\n\nTo create a new ticket, send /start`
     );
   } catch (err) {
     console.log('Create ticket error:', err);
     ctx.session = {};
-    return ctx.reply(`Error saving ticket: ${err.message}`, mainMenuButtons());
+    return ctx.reply(`Error saving ticket: ${err.message}`);
   }
 }
 
