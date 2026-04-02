@@ -166,6 +166,22 @@ async function sendMainMenu(ctx, text = 'Welcome to Hala Driver Support Bot') {
   return ctx.reply(text, mainMenuButtons());
 }
 
+function buildTicketMessage(ticket, assignedNameOverride = null, resolved = false) {
+  const assignedText = assignedNameOverride || ticket.assigned_agent || 'Not Assigned';
+  const statusText = resolved ? '🟢 Resolved' : '🟡 Pending';
+
+  return (
+    `${resolved ? '✅ Ticket Resolved' : '📝 Ticket Updated'}\n\n` +
+    `Ticket: ${ticket.ticket_number || ticket.id}\n` +
+    `Type: ${ticket.disposition || '-'}\n` +
+    `Meter ID: ${ticket.driver_id || '-'}\n` +
+    `${ticket.details_json && ticket.details_json.mobile_number ? `Mobile Number: ${ticket.details_json.mobile_number}\n` : ''}` +
+    `Priority: ${ticket.priority || '-'}\n` +
+    `Assigned: ${assignedText}\n` +
+    `Status: ${statusText}`
+  );
+}
+
 // ================= DUPLICATE-SAFE TICKET NUMBER =================
 
 async function getNextTicketNumber() {
@@ -574,7 +590,7 @@ bot.on('photo', async (ctx) => {
 
 bot.action(/assign_(.+)/, async (ctx) => {
   try {
-    await ctx.answerCbQuery('Processing...');
+    await ctx.answerCbQuery('Assigning...');
 
     const ticketId = ctx.match[1];
     const agentName = ctx.from.username
@@ -593,27 +609,29 @@ bot.action(/assign_(.+)/, async (ctx) => {
 
     if (error || !data) {
       console.log('Assign button error:', error || 'No matching ticket found');
-      return;
+      return ctx.answerCbQuery('Failed to assign ticket');
     }
 
-    const newText =
-      `📝 Ticket Updated\n\n` +
-      `Ticket: ${data.ticket_number || data.id}\n` +
-      `Type: ${data.disposition}\n` +
-      `Meter ID: ${data.driver_id}\n` +
-      `Priority: ${data.priority}\n` +
-      `Assigned: ${agentName}\n` +
-      `Status: 🟡 Pending`;
+    const newText = buildTicketMessage(data, agentName, false);
 
-    await ctx.editMessageText(newText, ticketButtons(ticketId));
+    if (data.photo_file_id) {
+      await ctx.editMessageCaption(newText, {
+        reply_markup: ticketButtons(ticketId).reply_markup
+      });
+    } else {
+      await ctx.editMessageText(newText, ticketButtons(ticketId));
+    }
   } catch (err) {
     console.log('Assign action error:', err);
+    try {
+      await ctx.answerCbQuery('Something went wrong');
+    } catch (e) {}
   }
 });
 
 bot.action(/resolve_(.+)/, async (ctx) => {
   try {
-    await ctx.answerCbQuery('Processing...');
+    await ctx.answerCbQuery('Resolving...');
 
     const ticketId = ctx.match[1];
 
@@ -632,7 +650,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
 
     if (error || !data) {
       console.log('Resolve button error:', error || 'No matching ticket found');
-      return;
+      return ctx.answerCbQuery('Failed to resolve ticket');
     }
 
     await updateResolvedTicketInGoogleSheet(data);
@@ -646,20 +664,18 @@ bot.action(/resolve_(.+)/, async (ctx) => {
       console.log('Driver notify error:', notifyErr);
     }
 
-    const assignedText = data.assigned_agent || 'Not Assigned';
+    const newText = buildTicketMessage(data, null, true);
 
-    const newText =
-      `✅ Ticket Resolved\n\n` +
-      `Ticket: ${data.ticket_number || data.id}\n` +
-      `Type: ${data.disposition}\n` +
-      `Meter ID: ${data.driver_id}\n` +
-      `Priority: ${data.priority}\n` +
-      `Assigned: ${assignedText}\n` +
-      `Status: 🟢 Resolved`;
-
-    await ctx.editMessageText(newText);
+    if (data.photo_file_id) {
+      await ctx.editMessageCaption(newText);
+    } else {
+      await ctx.editMessageText(newText);
+    }
   } catch (err) {
     console.log('Resolve action error:', err);
+    try {
+      await ctx.answerCbQuery('Something went wrong');
+    } catch (e) {}
   }
 });
 
