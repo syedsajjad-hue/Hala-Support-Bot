@@ -73,10 +73,10 @@ function issueTypeButtons() {
   ]);
 }
 
-function backCancelButtons() {
+function photoStepButtons() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback('Back', 'nav_back'),
+      Markup.button.callback('Skip Photo', 'skip_photo'),
       Markup.button.callback('Cancel', 'nav_cancel')
     ]
   ]);
@@ -146,36 +146,20 @@ async function sendMainMenu(ctx, text = 'Welcome to Hala Driver Support Bot') {
   return ctx.reply(text, mainMenuButtons());
 }
 
-async function sendIssueMenu(ctx) {
-  ctx.session = { step: 'disposition' };
-  return ctx.reply('Select issue type:', issueTypeButtons());
-}
+// ================= DUPLICATE-SAFE TICKET NUMBER =================
 
 async function getNextTicketNumber() {
-  const { data, error } = await supabase
-    .from('tickets')
-    .select('ticket_number')
-    .not('ticket_number', 'is', null);
+  const { data, error } = await supabase.rpc('generate_hala_ticket_number');
 
   if (error) {
-    console.log('Ticket number fetch error:', error);
-    return 'HALA-001';
+    console.log('Ticket number RPC error:', error);
+    throw new Error('Failed to generate ticket number');
   }
 
-  let maxNumber = 0;
-
-  for (const row of data || []) {
-    const value = row.ticket_number;
-    if (typeof value === 'string' && /^HALA-\d{3,}$/.test(value)) {
-      const num = parseInt(value.split('-')[1], 10);
-      if (!isNaN(num) && num > maxNumber) {
-        maxNumber = num;
-      }
-    }
-  }
-
-  return `HALA-${String(maxNumber + 1).padStart(3, '0')}`;
+  return data;
 }
+
+// ================= GOOGLE SHEETS HELPERS =================
 
 async function appendTicketToGoogleSheet(ticket) {
   try {
@@ -365,130 +349,133 @@ async function checkUnresolvedTickets() {
 // ================= START + MENU =================
 
 bot.start(async (ctx) => {
-  return sendMainMenu(ctx);
+  return sendMainMenu(ctx, 'Welcome to Hala Driver Support Bot');
 });
 
 bot.command('menu', async (ctx) => {
   return sendMainMenu(ctx, 'Main menu');
 });
 
-// Optional typed fallback
-bot.hears(/^create ticket$/i, async (ctx) => {
-  return sendIssueMenu(ctx);
+bot.command('cancel', async (ctx) => {
+  return sendMainMenu(ctx, 'Cancelled. Back to main menu.');
 });
 
-bot.hears(/^check ticket status$/i, async (ctx) => {
-  ctx.session = { step: 'check_ticket_number' };
-  return ctx.reply('Please enter ticket number:', backCancelButtons());
-});
-
-// ================= INLINE BUTTON ACTIONS =================
+// ================= MENU ACTIONS =================
 
 bot.action('menu_create_ticket', async (ctx) => {
   await ctx.answerCbQuery();
-  return sendIssueMenu(ctx);
+  ctx.session = { step: 'disposition' };
+
+  return ctx.editMessageText('Select issue type:', issueTypeButtons());
 });
 
 bot.action('menu_check_status', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = { step: 'check_ticket_number' };
-  return ctx.reply('Please enter ticket number:', backCancelButtons());
-});
 
-bot.action('disp_payment', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Payment Issue',
-    step: 'meter_id'
-  };
-  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
-});
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
 
-bot.action('disp_account_block', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Account Block',
-    step: 'meter_id'
-  };
-  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
-});
-
-bot.action('disp_stuck_booking', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Stuck Booking',
-    step: 'meter_id'
-  };
-  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
-});
-
-bot.action('disp_device_issue', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Device Issue',
-    step: 'meter_id'
-  };
-  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
+  return ctx.reply('Please enter ticket number:');
 });
 
 bot.action('nav_back_main', async (ctx) => {
   await ctx.answerCbQuery();
-  return sendMainMenu(ctx, 'Main menu');
+  ctx.session = {};
+
+  return ctx.editMessageText('Welcome to Hala Driver Support Bot', mainMenuButtons());
 });
 
 bot.action('nav_cancel', async (ctx) => {
   await ctx.answerCbQuery();
+
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
+
   return sendMainMenu(ctx, 'Cancelled. Back to main menu.');
 });
 
-bot.action('nav_back', async (ctx) => {
+// ================= DISPOSITION ACTIONS =================
+
+bot.action('disp_payment', async (ctx) => {
   await ctx.answerCbQuery();
 
-  if (!ctx.session || !ctx.session.step) {
-    return sendMainMenu(ctx, 'Main menu');
+  ctx.session = {
+    disposition: 'Payment Issue',
+    step: 'meter_id'
+  };
+
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
+bot.action('disp_account_block', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    disposition: 'Account Block',
+    step: 'meter_id'
+  };
+
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
+bot.action('disp_stuck_booking', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    disposition: 'Stuck Booking',
+    step: 'meter_id'
+  };
+
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
+bot.action('disp_device_issue', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    disposition: 'Device Issue',
+    step: 'meter_id'
+  };
+
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
+// ================= OPTIONAL PHOTO SKIP =================
+
+bot.action('skip_photo', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  if (!ctx.session || ctx.session.step !== 'awaiting_photo') {
+    return;
   }
 
-  const step = ctx.session.step;
+  ctx.session.photo_file_id = null;
+  ctx.session.step = 'description';
 
-  if (step === 'check_ticket_number') {
-    return sendMainMenu(ctx, 'Main menu');
-  }
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {}
 
-  if (step === 'meter_id') {
-    return sendIssueMenu(ctx);
-  }
-
-  if (step === 'fare' || step === 'car_side_number' || step === 'device_id') {
-    ctx.session.step = 'meter_id';
-    return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
-  }
-
-  if (step === 'time') {
-    ctx.session.step = 'fare';
-    return ctx.reply('Enter Fare:', backCancelButtons());
-  }
-
-  if (step === 'awaiting_photo') {
-    ctx.session.step = 'time';
-    return ctx.reply('Enter Time:', backCancelButtons());
-  }
-
-  if (step === 'description') {
-    if (ctx.session.disposition === 'Payment Issue') {
-      ctx.session.step = 'awaiting_photo';
-      return ctx.reply('Upload photo now:', backCancelButtons());
-    }
-
-    if (ctx.session.disposition === 'Device Issue') {
-      ctx.session.step = 'device_id';
-      return ctx.reply('Enter Device ID:', backCancelButtons());
-    }
-
-    ctx.session.step = 'meter_id';
-    return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
-  }
-
-  return sendMainMenu(ctx, 'Main menu');
+  return ctx.reply('Photo skipped. Enter description:');
 });
 
 // ================= PHOTO =================
@@ -501,7 +488,7 @@ bot.on('photo', async (ctx) => {
     ctx.session.photo_file_id = photo.file_id;
     ctx.session.step = 'description';
 
-    return ctx.reply('Enter description:', backCancelButtons());
+    return ctx.reply('Photo received. Enter description:');
   } catch (err) {
     console.log('Photo error:', err);
     return ctx.reply('Error receiving photo');
@@ -601,7 +588,7 @@ bot.action(/resolve_(.+)/, async (ctx) => {
   }
 });
 
-// ================= TEXT INPUT FLOW =================
+// ================= TEXT FLOW =================
 
 bot.on('text', async (ctx) => {
   try {
@@ -609,7 +596,7 @@ bot.on('text', async (ctx) => {
 
     const text = sanitizeText(ctx.message.text);
 
-    if (/^\/start$/i.test(text) || /^\/menu$/i.test(text)) {
+    if (/^\/start$/i.test(text) || /^\/menu$/i.test(text) || /^\/cancel$/i.test(text)) {
       return;
     }
 
@@ -644,14 +631,14 @@ bot.on('text', async (ctx) => {
 
     if (ctx.session.step === 'meter_id') {
       if (!isValidMeterId(text)) {
-        return ctx.reply('Enter valid 7 digit Meter ID', backCancelButtons());
+        return ctx.reply('Enter valid 7 digit Meter ID');
       }
 
       ctx.session.meter_id = text;
 
       if (ctx.session.disposition === 'Payment Issue') {
         ctx.session.step = 'fare';
-        return ctx.reply('Enter Fare:', backCancelButtons());
+        return ctx.reply('Enter Fare:');
       }
 
       if (ctx.session.disposition === 'Account Block') {
@@ -660,25 +647,25 @@ bot.on('text', async (ctx) => {
 
       if (ctx.session.disposition === 'Stuck Booking') {
         ctx.session.step = 'car_side_number';
-        return ctx.reply('Enter Car Side Number:', backCancelButtons());
+        return ctx.reply('Enter Car Side Number:');
       }
 
       if (ctx.session.disposition === 'Device Issue') {
         ctx.session.step = 'device_id';
-        return ctx.reply('Enter Device ID:', backCancelButtons());
+        return ctx.reply('Enter Device ID:');
       }
     }
 
     if (ctx.session.step === 'fare') {
       ctx.session.fare = text;
       ctx.session.step = 'time';
-      return ctx.reply('Enter Time:', backCancelButtons());
+      return ctx.reply('Enter Time:');
     }
 
     if (ctx.session.step === 'time') {
       ctx.session.time = text;
       ctx.session.step = 'awaiting_photo';
-      return ctx.reply('Upload photo now:', backCancelButtons());
+      return ctx.reply('Send photo, or tap Skip Photo.', photoStepButtons());
     }
 
     if (ctx.session.step === 'car_side_number') {
@@ -689,7 +676,7 @@ bot.on('text', async (ctx) => {
     if (ctx.session.step === 'device_id') {
       ctx.session.device_id = text;
       ctx.session.step = 'description';
-      return ctx.reply('Enter short description:', backCancelButtons());
+      return ctx.reply('Enter short description:');
     }
 
     if (ctx.session.step === 'description') {
@@ -716,37 +703,57 @@ async function createTicket(ctx) {
       priority = 'High';
     }
 
-    const ticketNumber = await getNextTicketNumber();
+    let data = null;
+    let error = null;
 
-    const details = {
-      meter_id: ctx.session.meter_id,
-      fare: ctx.session.fare || null,
-      time: ctx.session.time || null,
-      car_side_number: ctx.session.car_side_number || null,
-      device_id: ctx.session.device_id || null
-    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const ticketNumber = await getNextTicketNumber();
 
-    const { data, error } = await supabase
-      .from('tickets')
-      .insert([
-        {
-          ticket_number: ticketNumber,
-          telegram_user_id: String(ctx.from.id),
-          driver_id: ctx.session.meter_id,
-          disposition: ctx.session.disposition,
-          description: ctx.session.description || null,
-          details_json: details,
-          photo_file_id: ctx.session.photo_file_id || null,
-          priority,
-          status: 'Pending',
-          assigned_agent: null,
-          alert_sent: false,
-          last_alert_at: null,
-          updated_at: new Date().toISOString()
-        }
-      ])
-      .select()
-      .single();
+      const details = {
+        meter_id: ctx.session.meter_id,
+        fare: ctx.session.fare || null,
+        time: ctx.session.time || null,
+        car_side_number: ctx.session.car_side_number || null,
+        device_id: ctx.session.device_id || null
+      };
+
+      const result = await supabase
+        .from('tickets')
+        .insert([
+          {
+            ticket_number: ticketNumber,
+            telegram_user_id: String(ctx.from.id),
+            driver_id: ctx.session.meter_id,
+            disposition: ctx.session.disposition,
+            description: ctx.session.description || null,
+            details_json: details,
+            photo_file_id: ctx.session.photo_file_id || null,
+            priority,
+            status: 'Pending',
+            assigned_agent: null,
+            alert_sent: false,
+            last_alert_at: null,
+            updated_at: new Date().toISOString()
+          }
+        ])
+        .select()
+        .single();
+
+      data = result.data;
+      error = result.error;
+
+      if (!error) {
+        break;
+      }
+
+      const isUniqueViolation =
+        error.code === '23505' ||
+        String(error.message || '').toLowerCase().includes('duplicate');
+
+      if (!isUniqueViolation) {
+        break;
+      }
+    }
 
     if (error) {
       console.log('Database error:', error);
