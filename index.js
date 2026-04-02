@@ -782,7 +782,10 @@ async function createTicket(ctx) {
     }
 
     ctx.session = {};
-    return ctx.reply(`✅ Ticket created: ${data.ticket_number}`, mainMenuButtons());
+    return ctx.reply(
+      `✅ Ticket created successfully\nTicket Number: ${data.ticket_number}`,
+      mainMenuButtons()
+    );
   } catch (err) {
     console.log('Create ticket error:', err);
     ctx.session = {};
