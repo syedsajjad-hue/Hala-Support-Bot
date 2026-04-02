@@ -152,7 +152,7 @@ async function getNextTicketNumber() {
   const { data, error } = await supabase.rpc('generate_hala_ticket_number');
 
   if (error) {
-    console.log('Ticket number RPC error:', error);
+    console.log('Ticket number RPC error:', JSON.stringify(error, null, 2));
     throw new Error('Failed to generate ticket number');
   }
 
@@ -756,9 +756,9 @@ async function createTicket(ctx) {
     }
 
     if (error) {
-      console.log('Database error:', error);
+      console.log('Database error FULL:', JSON.stringify(error, null, 2));
       ctx.session = {};
-      return ctx.reply('Database error', mainMenuButtons());
+      return ctx.reply(`Database error: ${error.message}`, mainMenuButtons());
     }
 
     await appendTicketToGoogleSheet(data);
@@ -786,7 +786,7 @@ async function createTicket(ctx) {
   } catch (err) {
     console.log('Create ticket error:', err);
     ctx.session = {};
-    return ctx.reply('Error saving ticket', mainMenuButtons());
+    return ctx.reply(`Error saving ticket: ${err.message}`, mainMenuButtons());
   }
 }
 
