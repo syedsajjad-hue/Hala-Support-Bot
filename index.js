@@ -18,17 +18,9 @@ const DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin';
 const ALERT_AFTER_MINUTES = 15;
 const REPEAT_ALERT_MINUTES = 5;
 
-if (!process.env.BOT_TOKEN) {
-  throw new Error('BOT_TOKEN is missing');
-}
-
-if (!process.env.SUPABASE_URL) {
-  throw new Error('SUPABASE_URL is missing');
-}
-
-if (!process.env.SUPABASE_KEY) {
-  throw new Error('SUPABASE_KEY is missing');
-}
+if (!process.env.BOT_TOKEN) throw new Error('BOT_TOKEN is missing');
+if (!process.env.SUPABASE_URL) throw new Error('SUPABASE_URL is missing');
+if (!process.env.SUPABASE_KEY) throw new Error('SUPABASE_KEY is missing');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -55,45 +47,48 @@ const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
 
 bot.use(session());
 
-// ================= KEYBOARDS =================
+// ================= INLINE MENUS =================
 
-function mainMenuKeyboard() {
-  return {
-    reply_markup: {
-      keyboard: [
-        ['Create Ticket', 'Check Ticket Status']
-      ],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-      persistent: true
-    }
-  };
+function mainMenuButtons() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Create Ticket', 'menu_create_ticket')],
+    [Markup.button.callback('Check Ticket Status', 'menu_check_status')]
+  ]);
 }
 
-function issueTypeKeyboard() {
-  return {
-    reply_markup: {
-      keyboard: [
-        ['Payment Issue', 'Account Block'],
-        ['Stuck Booking', 'Device Issue'],
-        ['Back', 'Cancel']
-      ],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-      persistent: true
-    }
-  };
+function issueTypeButtons() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Payment Issue', 'disp_payment'),
+      Markup.button.callback('Account Block', 'disp_account_block')
+    ],
+    [
+      Markup.button.callback('Stuck Booking', 'disp_stuck_booking'),
+      Markup.button.callback('Device Issue', 'disp_device_issue')
+    ],
+    [
+      Markup.button.callback('Back', 'nav_back_main'),
+      Markup.button.callback('Cancel', 'nav_cancel')
+    ]
+  ]);
 }
 
-function flowKeyboard() {
-  return {
-    reply_markup: {
-      keyboard: [['Back', 'Cancel']],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-      persistent: true
-    }
-  };
+function backCancelButtons() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Back', 'nav_back'),
+      Markup.button.callback('Cancel', 'nav_cancel')
+    ]
+  ]);
+}
+
+function ticketButtons(ticketId) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Assign to Me', `assign_${ticketId}`),
+      Markup.button.callback('Resolve', `resolve_${ticketId}`)
+    ]
+  ]);
 }
 
 // ================= HELPERS =================
@@ -104,15 +99,6 @@ function isValidMeterId(value) {
 
 function sanitizeText(value) {
   return String(value || '').trim();
-}
-
-function ticketButtons(ticketId) {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback('Assign to Me', `assign_${ticketId}`),
-      Markup.button.callback('Resolve', `resolve_${ticketId}`)
-    ]
-  ]);
 }
 
 function getStatusBadge(status) {
@@ -155,14 +141,14 @@ function protectDashboard(req, res, next) {
   return res.status(401).send('Invalid credentials.');
 }
 
-async function showMainMenu(ctx, message = 'Welcome to Hala Driver Support Bot') {
+async function sendMainMenu(ctx, text = 'Welcome to Hala Driver Support Bot') {
   ctx.session = {};
-  return ctx.reply(message, mainMenuKeyboard());
+  return ctx.reply(text, mainMenuButtons());
 }
 
-async function showIssueMenu(ctx) {
+async function sendIssueMenu(ctx) {
   ctx.session = { step: 'disposition' };
-  return ctx.reply('Select issue type:', issueTypeKeyboard());
+  return ctx.reply('Select issue type:', issueTypeButtons());
 }
 
 async function getNextTicketNumber() {
@@ -376,75 +362,136 @@ async function checkUnresolvedTickets() {
   }
 }
 
-// ================= BOT COMMANDS =================
+// ================= START + MENU =================
 
 bot.start(async (ctx) => {
-  return showMainMenu(ctx, 'Welcome to Hala Driver Support Bot');
+  return sendMainMenu(ctx);
 });
 
 bot.command('menu', async (ctx) => {
-  return showMainMenu(ctx, 'Main menu');
+  return sendMainMenu(ctx, 'Main menu');
 });
 
-bot.hears(/^cancel$/i, async (ctx) => {
-  return showMainMenu(ctx, 'Cancelled. Back to main menu.');
+// Optional typed fallback
+bot.hears(/^create ticket$/i, async (ctx) => {
+  return sendIssueMenu(ctx);
 });
 
-bot.hears(/^back$/i, async (ctx) => {
+bot.hears(/^check ticket status$/i, async (ctx) => {
+  ctx.session = { step: 'check_ticket_number' };
+  return ctx.reply('Please enter ticket number:', backCancelButtons());
+});
+
+// ================= INLINE BUTTON ACTIONS =================
+
+bot.action('menu_create_ticket', async (ctx) => {
+  await ctx.answerCbQuery();
+  return sendIssueMenu(ctx);
+});
+
+bot.action('menu_check_status', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = { step: 'check_ticket_number' };
+  return ctx.reply('Please enter ticket number:', backCancelButtons());
+});
+
+bot.action('disp_payment', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {
+    disposition: 'Payment Issue',
+    step: 'meter_id'
+  };
+  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
+});
+
+bot.action('disp_account_block', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {
+    disposition: 'Account Block',
+    step: 'meter_id'
+  };
+  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
+});
+
+bot.action('disp_stuck_booking', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {
+    disposition: 'Stuck Booking',
+    step: 'meter_id'
+  };
+  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
+});
+
+bot.action('disp_device_issue', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {
+    disposition: 'Device Issue',
+    step: 'meter_id'
+  };
+  return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
+});
+
+bot.action('nav_back_main', async (ctx) => {
+  await ctx.answerCbQuery();
+  return sendMainMenu(ctx, 'Main menu');
+});
+
+bot.action('nav_cancel', async (ctx) => {
+  await ctx.answerCbQuery();
+  return sendMainMenu(ctx, 'Cancelled. Back to main menu.');
+});
+
+bot.action('nav_back', async (ctx) => {
+  await ctx.answerCbQuery();
+
   if (!ctx.session || !ctx.session.step) {
-    return showMainMenu(ctx, 'Main menu');
+    return sendMainMenu(ctx, 'Main menu');
   }
 
   const step = ctx.session.step;
 
-  if (step === 'disposition' || step === 'check_ticket_number') {
-    return showMainMenu(ctx, 'Main menu');
+  if (step === 'check_ticket_number') {
+    return sendMainMenu(ctx, 'Main menu');
   }
 
   if (step === 'meter_id') {
-    return showIssueMenu(ctx);
+    return sendIssueMenu(ctx);
   }
 
   if (step === 'fare' || step === 'car_side_number' || step === 'device_id') {
     ctx.session.step = 'meter_id';
-    return ctx.reply('Enter 7-digit Meter ID:', flowKeyboard());
+    return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
   }
 
   if (step === 'time') {
     ctx.session.step = 'fare';
-    return ctx.reply('Enter Fare:', flowKeyboard());
+    return ctx.reply('Enter Fare:', backCancelButtons());
   }
 
   if (step === 'awaiting_photo') {
     ctx.session.step = 'time';
-    return ctx.reply('Enter Time:', flowKeyboard());
+    return ctx.reply('Enter Time:', backCancelButtons());
   }
 
   if (step === 'description') {
     if (ctx.session.disposition === 'Payment Issue') {
       ctx.session.step = 'awaiting_photo';
-      return ctx.reply('Upload photo now:', flowKeyboard());
+      return ctx.reply('Upload photo now:', backCancelButtons());
     }
 
     if (ctx.session.disposition === 'Device Issue') {
       ctx.session.step = 'device_id';
-      return ctx.reply('Enter Device ID:', flowKeyboard());
+      return ctx.reply('Enter Device ID:', backCancelButtons());
     }
 
-    return ctx.reply('Going back.', flowKeyboard());
+    ctx.session.step = 'meter_id';
+    return ctx.reply('Enter 7-digit Meter ID:', backCancelButtons());
   }
 
-  return showMainMenu(ctx, 'Main menu');
+  return sendMainMenu(ctx, 'Main menu');
 });
 
-bot.hears(/^create ticket$/i, async (ctx) => {
-  return showIssueMenu(ctx);
-});
-
-bot.hears(/^check ticket status$/i, async (ctx) => {
-  ctx.session = { step: 'check_ticket_number' };
-  return ctx.reply('Please enter ticket number:', flowKeyboard());
-});
+// ================= PHOTO =================
 
 bot.on('photo', async (ctx) => {
   try {
@@ -454,12 +501,14 @@ bot.on('photo', async (ctx) => {
     ctx.session.photo_file_id = photo.file_id;
     ctx.session.step = 'description';
 
-    return ctx.reply('Enter description:', flowKeyboard());
+    return ctx.reply('Enter description:', backCancelButtons());
   } catch (err) {
     console.log('Photo error:', err);
     return ctx.reply('Error receiving photo');
   }
 });
+
+// ================= TEAM ACTION BUTTONS =================
 
 bot.action(/assign_(.+)/, async (ctx) => {
   try {
@@ -552,19 +601,19 @@ bot.action(/resolve_(.+)/, async (ctx) => {
   }
 });
 
+// ================= TEXT INPUT FLOW =================
+
 bot.on('text', async (ctx) => {
   try {
-    if (!ctx.session) {
-      ctx.session = {};
-    }
-
-    if (!ctx.session.step) {
-      return;
-    }
+    if (!ctx.session) ctx.session = {};
 
     const text = sanitizeText(ctx.message.text);
 
-    if (/^cancel$/i.test(text) || /^back$/i.test(text)) {
+    if (/^\/start$/i.test(text) || /^\/menu$/i.test(text)) {
+      return;
+    }
+
+    if (!ctx.session.step) {
       return;
     }
 
@@ -580,7 +629,7 @@ bot.on('text', async (ctx) => {
       ctx.session = {};
 
       if (error || !data) {
-        return ctx.reply('Ticket not found.', mainMenuKeyboard());
+        return ctx.reply('Ticket not found.', mainMenuButtons());
       }
 
       return ctx.reply(
@@ -589,32 +638,20 @@ bot.on('text', async (ctx) => {
         `Status: ${data.status || '-'}\n` +
         `Priority: ${data.priority || '-'}\n` +
         `Assigned: ${data.assigned_agent || 'Not Assigned'}`,
-        mainMenuKeyboard()
+        mainMenuButtons()
       );
-    }
-
-    if (ctx.session.step === 'disposition') {
-      const valid = ['Payment Issue', 'Account Block', 'Stuck Booking', 'Device Issue'];
-
-      if (!valid.includes(text)) {
-        return ctx.reply('Please select issue type using buttons.', issueTypeKeyboard());
-      }
-
-      ctx.session.disposition = text;
-      ctx.session.step = 'meter_id';
-      return ctx.reply('Enter 7-digit Meter ID:', flowKeyboard());
     }
 
     if (ctx.session.step === 'meter_id') {
       if (!isValidMeterId(text)) {
-        return ctx.reply('Enter valid 7 digit Meter ID', flowKeyboard());
+        return ctx.reply('Enter valid 7 digit Meter ID', backCancelButtons());
       }
 
       ctx.session.meter_id = text;
 
       if (ctx.session.disposition === 'Payment Issue') {
         ctx.session.step = 'fare';
-        return ctx.reply('Enter Fare:', flowKeyboard());
+        return ctx.reply('Enter Fare:', backCancelButtons());
       }
 
       if (ctx.session.disposition === 'Account Block') {
@@ -623,25 +660,25 @@ bot.on('text', async (ctx) => {
 
       if (ctx.session.disposition === 'Stuck Booking') {
         ctx.session.step = 'car_side_number';
-        return ctx.reply('Enter Car Side Number:', flowKeyboard());
+        return ctx.reply('Enter Car Side Number:', backCancelButtons());
       }
 
       if (ctx.session.disposition === 'Device Issue') {
         ctx.session.step = 'device_id';
-        return ctx.reply('Enter Device ID:', flowKeyboard());
+        return ctx.reply('Enter Device ID:', backCancelButtons());
       }
     }
 
     if (ctx.session.step === 'fare') {
       ctx.session.fare = text;
       ctx.session.step = 'time';
-      return ctx.reply('Enter Time:', flowKeyboard());
+      return ctx.reply('Enter Time:', backCancelButtons());
     }
 
     if (ctx.session.step === 'time') {
       ctx.session.time = text;
       ctx.session.step = 'awaiting_photo';
-      return ctx.reply('Upload photo now:', flowKeyboard());
+      return ctx.reply('Upload photo now:', backCancelButtons());
     }
 
     if (ctx.session.step === 'car_side_number') {
@@ -652,7 +689,7 @@ bot.on('text', async (ctx) => {
     if (ctx.session.step === 'device_id') {
       ctx.session.device_id = text;
       ctx.session.step = 'description';
-      return ctx.reply('Enter short description:', flowKeyboard());
+      return ctx.reply('Enter short description:', backCancelButtons());
     }
 
     if (ctx.session.step === 'description') {
@@ -662,7 +699,7 @@ bot.on('text', async (ctx) => {
   } catch (err) {
     console.log('Text error:', err);
     ctx.session = {};
-    return ctx.reply('Something went wrong', mainMenuKeyboard());
+    return ctx.reply('Something went wrong', mainMenuButtons());
   }
 });
 
@@ -714,7 +751,7 @@ async function createTicket(ctx) {
     if (error) {
       console.log('Database error:', error);
       ctx.session = {};
-      return ctx.reply('Database error', mainMenuKeyboard());
+      return ctx.reply('Database error', mainMenuButtons());
     }
 
     await appendTicketToGoogleSheet(data);
@@ -738,11 +775,11 @@ async function createTicket(ctx) {
     }
 
     ctx.session = {};
-    return ctx.reply(`✅ Ticket created: ${data.ticket_number}`, mainMenuKeyboard());
+    return ctx.reply(`✅ Ticket created: ${data.ticket_number}`, mainMenuButtons());
   } catch (err) {
     console.log('Create ticket error:', err);
     ctx.session = {};
-    return ctx.reply('Error saving ticket', mainMenuKeyboard());
+    return ctx.reply('Error saving ticket', mainMenuButtons());
   }
 }
 
