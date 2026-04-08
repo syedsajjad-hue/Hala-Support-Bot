@@ -492,7 +492,7 @@ bot.action('disp_device_issue', async (ctx) => {
   } catch (e) {}
 
   return ctx.reply(
-    '⚠️ For further assistance related to device issue, please visit Hala Home between 9 AM to 5 PM.'
+    '⚠️ For Any assistance related to device issue, please visit Hala Home between 9 AM to 5 PM.'
   );
 });
 
