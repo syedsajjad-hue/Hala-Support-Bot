@@ -161,7 +161,7 @@ function protectDashboard(req, res, next) {
   return res.status(401).send('Invalid credentials.');
 }
 
-async function sendMainMenu(ctx, text = 'Welcome to Hala Driver Support Bot') {
+async function sendMainMenu(ctx, text = 'Welcome to Hala Captain Support Bot') {
   ctx.session = {};
   return ctx.reply(text, mainMenuButtons());
 }
@@ -385,7 +385,7 @@ async function checkUnresolvedTickets() {
 // ================= START + MENU =================
 
 bot.start(async (ctx) => {
-  return sendMainMenu(ctx, 'Welcome to Hala Driver Support Bot');
+  return sendMainMenu(ctx, 'Welcome to Hala Captain Support Bot');
 });
 
 bot.command('menu', async (ctx) => {
@@ -482,19 +482,18 @@ bot.action('disp_stuck_booking', async (ctx) => {
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
+// ================= DEVICE ISSUE DISABLED =================
+
 bot.action('disp_device_issue', async (ctx) => {
   await ctx.answerCbQuery();
-
-  ctx.session = {
-    disposition: 'Device Issue',
-    step: 'meter_id'
-  };
 
   try {
     await ctx.deleteMessage();
   } catch (e) {}
 
-  return ctx.reply('Enter 7-digit Meter ID:');
+  return ctx.reply(
+    '⚠️ For further assistance related to device issue, please visit Hala Home between 9 AM to 5 PM.'
+  );
 });
 
 bot.action('disp_profile_update', async (ctx) => {
@@ -739,11 +738,6 @@ bot.on('text', async (ctx) => {
       if (ctx.session.disposition === 'Stuck Booking') {
         ctx.session.step = 'car_side_number';
         return ctx.reply('Enter Car Side Number:');
-      }
-
-      if (ctx.session.disposition === 'Device Issue') {
-        ctx.session.step = 'device_id';
-        return ctx.reply('Enter Device ID:');
       }
 
       if (ctx.session.disposition === 'Profile Update') {
