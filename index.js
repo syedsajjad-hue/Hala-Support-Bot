@@ -1,4 +1,5 @@
 require('dotenv').config();
+
 const express = require('express');
 const { Telegraf, Markup, session } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
@@ -90,19 +91,23 @@ bot.action('nav_back_main', async (ctx) => {
 
 bot.action('disp_payment', async (ctx) => {
   await ctx.answerCbQuery();
+
   ctx.session = {
     disposition: 'Payment Issue',
     step: 'meter_id'
   };
+
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
 bot.action('disp_stuck_booking', async (ctx) => {
   await ctx.answerCbQuery();
+
   ctx.session = {
     disposition: 'Stuck Booking',
     step: 'meter_id'
   };
+
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
@@ -122,26 +127,33 @@ bot.action('disp_account_block', async (ctx) => {
 
 bot.action('disp_profile_update', async (ctx) => {
   await ctx.answerCbQuery();
+
   ctx.session = {
     disposition: 'Profile Update',
     step: 'profile_update_type'
   };
+
   return ctx.editMessageText('Select Profile Update Type:', profileUpdateButtons());
 });
 
 bot.action('profile_number_update', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = {};
-  return ctx.reply('Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb');
+
+  return ctx.reply(
+    'Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb'
+  );
 });
 
 bot.action('profile_picture_update', async (ctx) => {
   await ctx.answerCbQuery();
+
   ctx.session = {
     disposition: 'Profile Update',
     profile_update_type: 'Profile Picture Update',
     step: 'awaiting_profile_picture'
   };
+
   return ctx.reply('Upload Profile Picture (White Background & Uniform)');
 });
 
@@ -149,6 +161,7 @@ bot.action('profile_picture_update', async (ctx) => {
 
 bot.on('text', async (ctx) => {
   if (!ctx.session) ctx.session = {};
+
   const text = ctx.message.text.trim();
 
   if (ctx.session.step === 'check_ticket') {
@@ -182,12 +195,14 @@ bot.on('text', async (ctx) => {
   if (ctx.session.step === 'time') {
     ctx.session.time = text;
     ctx.session.step = 'photo_option';
+
     return ctx.reply('Do you want to attach a photo?', photoOptionButtons());
   }
 
   if (ctx.session.step === 'car_side_number') {
     ctx.session.car_side_number = text;
     ctx.session.step = 'description';
+
     return ctx.reply('Enter Description:');
   }
 
@@ -260,29 +275,34 @@ async function generateTicketNumber() {
 /* ================= ADMIN NOTIFICATION ================= */
 
 async function sendAdminNotification(ctx, data) {
-  if (!process.env.ADMIN_CHAT_ID) {
-    console.log('ADMIN_CHAT_ID missing in Render env');
-    return;
-  }
+  try {
+    if (!process.env.ADMIN_CHAT_ID) {
+      console.log('ADMIN_CHAT_ID missing');
+      return;
+    }
 
-  const adminMessage =
-    `✅ New Ticket Created\n\n` +
-    `Ticket: ${data.ticket_number}\n` +
-    `Type: ${ctx.session.disposition || 'N/A'}\n` +
-    `Meter ID: ${ctx.session.meter_id || 'N/A'}\n` +
-    `Fare: ${ctx.session.fare || 'N/A'}\n` +
-    `Time: ${ctx.session.time || 'N/A'}\n` +
-    `Car Side Number: ${ctx.session.car_side_number || 'N/A'}\n` +
-    `Description: ${ctx.session.description || 'N/A'}\n` +
-    `Priority: Medium\n` +
-    `Status: Pending`;
+    const adminMessage =
+      `✅ New Ticket Created\n\n` +
+      `Ticket: ${data.ticket_number}\n` +
+      `Type: ${ctx.session.disposition || 'N/A'}\n` +
+      `Meter ID: ${ctx.session.meter_id || 'N/A'}\n` +
+      `Fare: ${ctx.session.fare || 'N/A'}\n` +
+      `Time: ${ctx.session.time || 'N/A'}\n` +
+      `Car Side Number: ${ctx.session.car_side_number || 'N/A'}\n` +
+      `Description: ${ctx.session.description || 'N/A'}\n` +
+      `Priority: Medium\n` +
+      `Status: Pending`;
 
-  await bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, adminMessage);
+    await bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, adminMessage);
 
-  if (ctx.session.photo) {
-    await bot.telegram.sendPhoto(process.env.ADMIN_CHAT_ID, ctx.session.photo, {
-      caption: `Photo attached for Ticket: ${data.ticket_number}`
-    });
+    if (ctx.session.photo) {
+      await bot.telegram.sendPhoto(process.env.ADMIN_CHAT_ID, ctx.session.photo, {
+        caption: `Photo attached for Ticket: ${data.ticket_number}`
+      });
+    }
+
+  } catch (err) {
+    console.log('ADMIN NOTIFICATION ERROR:', err.message);
   }
 }
 
@@ -379,10 +399,147 @@ async function checkTicketStatus(ctx, ticketNumber) {
     );
 
   } catch (err) {
-    console.log(err);
+    console.log('CHECK STATUS ERROR:', err.message);
     return ctx.reply('Error checking ticket.');
   }
 }
+
+/* ================= DASHBOARD ================= */
+
+app.get('/dashboard', async (req, res) => {
+  try {
+    const { data: tickets, error } = await supabase
+      .from('tickets')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const rows = (tickets || []).map(t => `
+      <tr>
+        <td>${t.ticket_number || ''}</td>
+        <td>${t.disposition || ''}</td>
+        <td>${t.driver_id || ''}</td>
+        <td>${t.fare || ''}</td>
+        <td>${t.time || ''}</td>
+        <td>${t.car_side_number || ''}</td>
+        <td>${t.priority || 'Medium'}</td>
+        <td>${t.status || 'Pending'}</td>
+        <td>${(t.description || '').replace(/\n/g, '<br>')}</td>
+        <td>
+          ${t.status === 'Resolved'
+            ? 'Resolved'
+            : `<a href="/resolve/${t.id}">Resolve</a>`
+          }
+        </td>
+      </tr>
+    `).join('');
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Hala Support Dashboard</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+          }
+          h1 {
+            color: #222;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            font-size: 14px;
+          }
+          th, td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: left;
+            vertical-align: top;
+          }
+          th {
+            background: #00a859;
+            color: white;
+          }
+          a {
+            color: #00a859;
+            font-weight: bold;
+            text-decoration: none;
+          }
+          .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+          }
+          .btn {
+            background: #00a859;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            text-decoration: none;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="top">
+          <h1>Hala Support Dashboard</h1>
+          <a class="btn" href="/dashboard">Refresh</a>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Ticket</th>
+              <th>Type</th>
+              <th>Meter ID</th>
+              <th>Fare</th>
+              <th>Time</th>
+              <th>Car Side</th>
+              <th>Priority</th>
+              <th>Status</th>
+              <th>Description</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || '<tr><td colspan="10">No tickets found</td></tr>'}
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `);
+
+  } catch (err) {
+    console.log('DASHBOARD ERROR:', err.message);
+    res.send('Dashboard error: ' + err.message);
+  }
+});
+
+/* ================= RESOLVE TICKET ================= */
+
+app.get('/resolve/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { error } = await supabase
+      .from('tickets')
+      .update({ status: 'Resolved' })
+      .eq('id', id);
+
+    if (error) throw error;
+
+    res.redirect('/dashboard');
+
+  } catch (err) {
+    console.log('RESOLVE ERROR:', err.message);
+    res.send('Resolve error: ' + err.message);
+  }
+});
 
 /* ================= SERVER ================= */
 
