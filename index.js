@@ -72,7 +72,7 @@ bot.action('nav_back_main', async (ctx) => {
   );
 });
 
-/* ================= DISPOSITIONS ================= */
+/* ================= ISSUE TYPES ================= */
 
 bot.action('disp_payment', async (ctx) => {
   await ctx.answerCbQuery();
@@ -102,6 +102,47 @@ bot.action('disp_account_block', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = {};
   return ctx.reply('Please visit Hala Home for Account Block/Suspend.');
+});
+
+/* ================= PROFILE UPDATE (FIXED - MAIN ISSUE) ================= */
+
+bot.action('disp_profile_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    disposition: 'Profile Update',
+    step: 'profile_update_type'
+  };
+
+  return ctx.editMessageText(
+    'Select Profile Update Type:',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback('Number Update', 'profile_number_update'),
+        Markup.button.callback('Profile Picture Update', 'profile_picture_update')
+      ]
+    ])
+  );
+});
+
+bot.action('profile_number_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session.disposition = 'Profile Update';
+  ctx.session.profile_update_type = 'Number Update';
+  ctx.session.step = 'meter_id';
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
+bot.action('profile_picture_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session.disposition = 'Profile Update';
+  ctx.session.profile_update_type = 'Profile Picture Update';
+  ctx.session.step = 'awaiting_profile_picture';
+
+  return ctx.reply('Upload Profile Picture (White Background & Uniform)');
 });
 
 /* ================= TEXT FLOW ================= */
@@ -163,7 +204,15 @@ bot.action('skip_photo', async (ctx) => {
 /* ================= PHOTO HANDLER ================= */
 
 bot.on('photo', async (ctx) => {
+
+  // Payment flow photo
   if (ctx.session.step === 'awaiting_photo') {
+    ctx.session.photo = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+    return createTicket(ctx);
+  }
+
+  // Profile picture update (FIXED)
+  if (ctx.session.step === 'awaiting_profile_picture') {
     ctx.session.photo = ctx.message.photo[ctx.message.photo.length - 1].file_id;
     return createTicket(ctx);
   }
@@ -181,8 +230,8 @@ async function createTicket(ctx) {
         driver_id: ctx.session.meter_id,
         disposition: ctx.session.disposition,
         description: ctx.session.description || '',
-        fare: ctx.session.fare,
-        time: ctx.session.time,
+        fare: ctx.session.fare || '',
+        time: ctx.session.time || '',
         photo: ctx.session.photo || null,
         status: 'Pending',
         priority: 'Medium'
