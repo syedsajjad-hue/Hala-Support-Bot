@@ -259,22 +259,19 @@ async function generateTicketNumber() {
   return 'HALA-' + String(nextNumber).padStart(3, '0');
 }
 
-/* ================= ADMIN NOTIFICATION ================= */
+/* ================= GROUP NOTIFICATION ================= */
 
 async function sendAdminNotification(ctx, data) {
   try {
-    const adminChatId =
-      process.env.ADMIN_CHAT_ID ||
-      process.env.SUPPORT_QUEUE_CHAT_ID ||
-      process.env.HALA_SUPPORT_QUEUE_ID;
+    const teamChatId = process.env.TEAM_CHAT_ID;
 
-    if (!adminChatId) {
-      console.log('ADMIN_CHAT_ID missing');
-      return;
+    if (!teamChatId) {
+      console.log('TEAM_CHAT_ID missing in Render ENV');
+      return ctx.reply('Ticket created, but TEAM_CHAT_ID is missing in Render ENV.');
     }
 
-    const adminMessage =
-      `✅ New Ticket Created\n\n` +
+    const message =
+      `✅ Ticket Created\n\n` +
       `Ticket: ${data.ticket_number}\n` +
       `Type: ${ctx.session.disposition || 'N/A'}\n` +
       `Meter ID: ${ctx.session.meter_id || 'N/A'}\n` +
@@ -285,17 +282,23 @@ async function sendAdminNotification(ctx, data) {
       `Priority: Medium\n` +
       `Status: Pending`;
 
-    await bot.telegram.sendMessage(adminChatId, adminMessage);
+    await bot.telegram.sendMessage(teamChatId, message);
 
     if (ctx.session.photo) {
-      await bot.telegram.sendPhoto(adminChatId, ctx.session.photo, {
+      await bot.telegram.sendPhoto(teamChatId, ctx.session.photo, {
         caption: `Photo attached for Ticket: ${data.ticket_number}`
       });
     }
 
-    console.log('Admin notification sent');
+    console.log('Ticket sent to support queue successfully');
+
   } catch (err) {
-    console.log('ADMIN NOTIFICATION ERROR:', err.message);
+    console.log('GROUP SEND ERROR:', err);
+
+    await ctx.reply(
+      'Ticket created, but failed to send to support group:\n' +
+      (err.description || err.message)
+    );
   }
 }
 
