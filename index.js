@@ -75,18 +75,25 @@ function ticketMessage(ticket) {
   const status = ticket.status || 'Pending';
   const statusLine = status === 'Resolved' ? '🟢 Resolved' : '🟡 Pending';
 
-  return (
+  let msg =
     `${status === 'Resolved' ? '✅ Ticket Resolved' : '🟡 Ticket Pending'}\n\n` +
     `Ticket: ${ticket.ticket_number}\n` +
     `Type: ${ticket.disposition || 'N/A'}\n` +
     `Meter ID: ${ticket.driver_id || 'N/A'}\n` +
-    `Fare: ${ticket.fare || 'N/A'}\n` +
-    `Time: ${ticket.time || 'N/A'}\n` +
-    `Car Side Number: ${ticket.car_side_number || 'N/A'}\n` +
+    `Car Side Number: ${ticket.car_side_number || 'N/A'}\n`;
+
+  if (ticket.disposition === 'Payment Issue') {
+    msg +=
+      `Fare: ${ticket.fare || 'N/A'}\n` +
+      `Time: ${ticket.time || 'N/A'}\n`;
+  }
+
+  msg +=
     `Priority: ${ticket.priority || 'Medium'}\n` +
     `Assigned: ${ticket.assigned_to || 'Unassigned'}\n` +
-    `Status: ${statusLine}`
-  );
+    `Status: ${statusLine}`;
+
+  return msg;
 }
 
 /* ================= START ================= */
@@ -164,7 +171,6 @@ bot.action('profile_picture_update', async (ctx) => {
 
 bot.on('text', async (ctx) => {
   if (!ctx.session) ctx.session = {};
-
   const text = ctx.message.text.trim();
 
   if (ctx.session.step === 'check_ticket') {
@@ -177,6 +183,13 @@ bot.on('text', async (ctx) => {
     }
 
     ctx.session.meter_id = text;
+    ctx.session.step = 'car_side_number';
+
+    return ctx.reply('Enter Car Side Number:');
+  }
+
+  if (ctx.session.step === 'car_side_number') {
+    ctx.session.car_side_number = text;
 
     if (ctx.session.disposition === 'Payment Issue') {
       ctx.session.step = 'fare';
@@ -184,8 +197,8 @@ bot.on('text', async (ctx) => {
     }
 
     if (ctx.session.disposition === 'Stuck Booking') {
-      ctx.session.step = 'car_side_number';
-      return ctx.reply('Enter Car Side Number:');
+      ctx.session.step = 'photo_option';
+      return ctx.reply('Do you want to attach a photo?', photoButtons());
     }
   }
 
@@ -199,17 +212,6 @@ bot.on('text', async (ctx) => {
     ctx.session.time = text;
     ctx.session.step = 'photo_option';
     return ctx.reply('Do you want to attach a photo?', photoButtons());
-  }
-
-  if (ctx.session.step === 'car_side_number') {
-    ctx.session.car_side_number = text;
-    ctx.session.step = 'description';
-    return ctx.reply('Enter Description:');
-  }
-
-  if (ctx.session.step === 'description') {
-    ctx.session.description = text;
-    return createTicket(ctx);
   }
 
   return ctx.reply('Please use /start to begin.');
@@ -241,7 +243,6 @@ bot.action('skip_photo', async (ctx) => {
 
 bot.on('photo', async (ctx) => {
   if (!ctx.session) ctx.session = {};
-
   const photoId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
 
   if (ctx.session.step === 'awaiting_photo') {
@@ -251,7 +252,7 @@ bot.on('photo', async (ctx) => {
 
   if (ctx.session.step === 'awaiting_profile_picture') {
     ctx.session.photo = photoId;
-    ctx.session.description = 'Profile Picture Update';
+    ctx.session.car_side_number = 'N/A';
     return createTicket(ctx);
   }
 
@@ -274,7 +275,6 @@ async function generateTicketNumber() {
     const match = row.ticket_number?.match(/^HALA-(\d+)$/);
     if (match) {
       const num = parseInt(match[1], 10);
-
       if (num >= 101 && num < 1000 && num > maxNumber) {
         maxNumber = num;
       }
@@ -325,7 +325,7 @@ async function createTicket(ctx) {
       fare: ctx.session.fare || '',
       time: ctx.session.time || '',
       photo: ctx.session.photo || null,
-      car_side_number: ctx.session.car_side_number || '',
+      car_side_number: ctx.session.car_side_number || 'N/A',
       assigned_to: 'Unassigned',
       status: 'Pending',
       priority: 'Medium'
@@ -516,6 +516,7 @@ app.get('/dashboard', async (req, res) => {
         <td>${t.ticket_number || ''}</td>
         <td>${t.disposition || ''}</td>
         <td>${t.driver_id || ''}</td>
+        <td>${t.car_side_number || 'N/A'}</td>
         <td>${t.priority || 'Medium'}</td>
         <td>${t.status || 'Pending'}</td>
         <td>${t.assigned_to || 'Unassigned'}</td>
@@ -569,8 +570,12 @@ td{border-bottom:1px solid #e5eaf2;padding:11px;vertical-align:top}
 <div class="panel"><h2>Type Score Board</h2>${typeBars || 'No type data'}</div>
 </div>
 <div class="table-wrap"><h2>Tickets</h2><table>
-<thead><tr><th>Ticket</th><th>Type</th><th>Meter ID</th><th>Priority</th><th>Status</th><th>Agent</th><th>Description</th></tr></thead>
-<tbody>${rows || '<tr><td colspan="7">No tickets found</td></tr>'}</tbody>
+<thead>
+<tr>
+<th>Ticket</th><th>Type</th><th>Meter ID</th><th>Car Side</th><th>Priority</th><th>Status</th><th>Agent</th><th>Description</th>
+</tr>
+</thead>
+<tbody>${rows || '<tr><td colspan="8">No tickets found</td></tr>'}</tbody>
 </table></div>
 </div>
 </body>
