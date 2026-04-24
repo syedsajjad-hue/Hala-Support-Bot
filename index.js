@@ -11,42 +11,21 @@ const PORT = process.env.PORT || 10000;
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 const WEBHOOK_PATH = '/telegram-webhook';
 
-const DASHBOARD_USER = process.env.DASHBOARD_USER || 'admin';
-const DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin';
-
-const ALERT_AFTER_MINUTES = 15;
-const REPEAT_ALERT_MINUTES = 5;
-
-if (!process.env.BOT_TOKEN) throw new Error('BOT_TOKEN missing');
-if (!process.env.SUPABASE_URL) throw new Error('SUPABASE_URL missing');
-if (!process.env.SUPABASE_KEY) throw new Error('SUPABASE_KEY missing');
-
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// ================= GOOGLE SHEETS =================
-const sheetsAuth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-  },
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-
-const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
-
-// ================= SESSION =================
 bot.use(session());
 
-// ================= MENUS =================
-function mainMenuButtons() {
+// ================= MAIN MENU =================
+function mainMenu() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('Create Ticket', 'menu_create_ticket')],
-    [Markup.button.callback('Check Ticket Status', 'menu_check_status')]
+    [Markup.button.callback('Create Ticket', 'menu_create')],
+    [Markup.button.callback('Check Ticket', 'menu_check')]
   ]);
 }
 
-function issueTypeButtons() {
+// ================= ISSUE MENU =================
+function issueMenu() {
   return Markup.inlineKeyboard([
     [
       Markup.button.callback('Payment Issue', 'disp_payment'),
@@ -65,19 +44,17 @@ function issueTypeButtons() {
 // ================= START =================
 bot.start((ctx) => {
   ctx.session = {};
-  return ctx.reply('Welcome to Hala Captain Support', mainMenuButtons());
+  return ctx.reply('Welcome to Hala Captain Support', mainMenu());
 });
 
 // ================= CREATE MENU FIX =================
-bot.action('menu_create_ticket', async (ctx) => {
+bot.action('menu_create', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = { step: 'disposition' };
 
-  try {
-    await ctx.deleteMessage();
-  } catch (e) {}
+  try { await ctx.deleteMessage(); } catch {}
 
-  return ctx.reply('Select issue type:', issueTypeButtons());
+  return ctx.reply('Select issue type:', issueMenu());
 });
 
 // ================= DEVICE ISSUE =================
@@ -86,26 +63,50 @@ bot.action('disp_device_issue', async (ctx) => {
   return ctx.reply('Please Visit Hala Home for Device Issue. Thanks');
 });
 
-// ================= PROFILE UPDATE =================
+// ================= PROFILE UPDATE MAIN =================
 bot.action('disp_profile_update', async (ctx) => {
   await ctx.answerCbQuery();
+
   ctx.session = {
     disposition: 'Profile Update',
-    step: 'profile_type'
+    step: 'profile_menu'
   };
 
-  return ctx.reply('Select type:\n1. Number Update\n2. Profile Picture Update');
+  return ctx.reply(
+    'Select Profile Update Type:',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Number Update', 'profile_number')],
+      [Markup.button.callback('Profile Picture Update', 'profile_picture')]
+    ])
+  );
 });
 
 // ================= NUMBER UPDATE =================
-bot.action('profile_number_update', async (ctx) => {
+bot.action('profile_number', async (ctx) => {
+  await ctx.answerCbQuery();
+
   ctx.session = {
     disposition: 'Profile Update',
-    profile_update_type: 'Number Update',
+    profile_type: 'Number Update',
     step: 'meter_id'
   };
 
   return ctx.reply('Enter Meter ID');
+});
+
+// ================= PROFILE PICTURE =================
+bot.action('profile_picture', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    disposition: 'Profile Update',
+    profile_type: 'Profile Picture Update',
+    step: 'await_photo'
+  };
+
+  return ctx.reply(
+    '📸 Please attach the picture in uniform with white background. Thanks'
+  );
 });
 
 // ================= TEXT FLOW =================
@@ -121,22 +122,49 @@ bot.on('text', async (ctx) => {
     return ctx.reply('Enter Mobile Number');
   }
 
-  // MOBILE NUMBER FIX (IMPORTANT)
+  // NUMBER UPDATE FINAL STEP
   if (ctx.session.step === 'mobile_number') {
     ctx.session.mobile_number = text;
-    ctx.session.description = `Number Update: ${text}`;
 
     await createTicket(ctx);
 
-    const ticket = ctx.session.last_ticket_number;
-    const url = `https://tinyurl.com/2p6spcpb?ticket=${ticket}`;
+    const ticket = ctx.session.last_ticket;
 
-    await ctx.reply(`📌 Number Update Form:\n${url}\n🎫 Ticket: ${ticket}`);
+    const url = `https://tinyurl.com/2p6spcpb?ticket=${ticket}&type=number_update`;
+
+    await ctx.reply(
+      `📌 Please click on the link:\n${url}\n\n🎫 Ticket: ${ticket}`
+    );
 
     if (process.env.TEAM_CHAT_ID) {
       await bot.telegram.sendMessage(
         process.env.TEAM_CHAT_ID,
         `Number Update Ticket\n${ticket}\n${url}`
+      );
+    }
+
+    return;
+  }
+});
+
+// ================= PHOTO HANDLER =================
+bot.on('photo', async (ctx) => {
+  if (!ctx.session) return;
+
+  if (ctx.session.step === 'await_photo') {
+    ctx.session.photo = ctx.message.photo.at(-1).file_id;
+
+    await createTicket(ctx);
+
+    const ticket = ctx.session.last_ticket;
+
+    await ctx.reply(`✅ Profile Picture Ticket Created\n🎫 Ticket: ${ticket}`);
+
+    if (process.env.TEAM_CHAT_ID) {
+      await bot.telegram.sendPhoto(
+        process.env.TEAM_CHAT_ID,
+        ctx.session.photo,
+        { caption: `Profile Picture Update\nTicket: ${ticket}` }
       );
     }
 
@@ -152,10 +180,11 @@ async function createTicket(ctx) {
       {
         ticket_number: 'TKT-' + Date.now(),
         disposition: ctx.session.disposition,
-        driver_id: ctx.session.meter_id,
-        description: ctx.session.description,
+        driver_id: ctx.session.meter_id || null,
+        description: ctx.session.description || '',
         details_json: {
-          mobile: ctx.session.mobile_number
+          mobile: ctx.session.mobile_number || null,
+          profile_type: ctx.session.profile_type || null
         },
         status: 'Pending'
       }
@@ -163,7 +192,7 @@ async function createTicket(ctx) {
     .select()
     .single();
 
-  ctx.session.last_ticket_number = data.ticket_number;
+  ctx.session.last_ticket = data.ticket_number;
 
   return data;
 }
