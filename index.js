@@ -11,34 +11,11 @@ const PORT = process.env.PORT || 10000;
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://hala-support-bot.onrender.com';
 const WEBHOOK_PATH = '/telegram-webhook';
 
-const DASHBOARD_USER = process.env.DASHBOARD_USER || 'admin';
-const DASHBOARD_PASS = process.env.DASHBOARD_PASS || 'admin';
-
-const ALERT_AFTER_MINUTES = 15;
-const REPEAT_ALERT_MINUTES = 5;
-
-if (!process.env.BOT_TOKEN) throw new Error('BOT_TOKEN is missing');
-if (!process.env.SUPABASE_URL) throw new Error('SUPABASE_URL is missing');
-if (!process.env.SUPABASE_KEY) throw new Error('SUPABASE_KEY is missing');
-
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// ================= GOOGLE SHEETS =================
-const sheetsAuth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY
-      ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
-      : undefined
-  },
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-
-const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
-
 // ================= SESSION =================
-bot.use(session());
+bot.use(session({ defaultSession: () => ({}) }));
 
 // ================= MENUS =================
 function mainMenuButtons() {
@@ -81,90 +58,123 @@ function profileUpdateButtons() {
   ]);
 }
 
-// ================= ACCOUNT BLOCK FIX (UPDATED) =================
-bot.action('disp_account_block', async (ctx) => {
-  await ctx.answerCbQuery();
+// ================= START FIX =================
+bot.start(async (ctx) => {
   ctx.session = {};
-  try { await ctx.deleteMessage(); } catch (e) {}
-
   return ctx.reply(
-    '👋 Dear Captain, Visit the Hala Home for the Account Block/Suspend. Thanks'
+    '👋 Welcome to Hala Captain Support Bot',
+    mainMenuButtons()
   );
 });
 
-// ================= PROFILE UPDATE =================
-bot.action('disp_profile_update', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = { disposition: 'Profile Update', step: 'profile_update_type' };
-  return ctx.editMessageText('Select profile update type:', profileUpdateButtons());
-});
-
-// ================= NUMBER UPDATE FIX =================
-bot.action('profile_number_update', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Profile Update',
-    profile_update_type: 'Number Update',
-    step: 'meter_id'
-  };
-
-  try { await ctx.deleteMessage(); } catch (e) {}
-
-  return ctx.reply('Enter 7-digit Meter ID:');
-});
-
-bot.action('profile_picture_update', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Profile Update',
-    profile_update_type: 'Profile Picture Update',
-    step: 'meter_id'
-  };
-
-  return ctx.reply('Upload picture with White Background and in Uniform.');
-});
-
-// ================= TEXT FLOW FIX =================
-bot.on('text', async (ctx) => {
-  if (!ctx.session) ctx.session = {};
-  const text = ctx.message.text;
-
-  if (ctx.session.step === 'meter_id') {
-    ctx.session.meter_id = text;
-
-    if (ctx.session.disposition === 'Profile Update') {
-      if (ctx.session.profile_update_type === 'Number Update') {
-
-        ctx.session.step = null;
-
-        return ctx.reply(
-          '📲 Please click on the link to update number:\n\nhttps://tinyurl.com/2p6spcpb'
-        );
-      }
-
-      if (ctx.session.profile_update_type === 'Profile Picture Update') {
-        ctx.session.step = 'awaiting_profile_picture';
-        return ctx.reply('Upload picture with White Background and in Uniform.');
-      }
-    }
-  }
-
-  // (REST OF YOUR ORIGINAL FLOW REMAINS UNCHANGED BELOW)
-});
-
-// ================= START =================
-bot.start(async (ctx) => {
-  ctx.session = {};
-  return ctx.reply('Welcome to Hala Captain Support Bot', mainMenuButtons());
-});
-
+// ================= MAIN MENU =================
 bot.action('menu_create_ticket', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = { step: 'disposition' };
   return ctx.editMessageText('Select issue type:', issueTypeButtons());
 });
 
-// ================= WEBHOOK =================
+bot.action('menu_check_status', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = { step: 'check_ticket_number' };
+  return ctx.reply('Please enter ticket number:');
+});
+
+// ================= BACK =================
+bot.action('nav_back_main', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {};
+  return ctx.editMessageText('Main Menu', mainMenuButtons());
+});
+
+bot.action('nav_cancel', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {};
+  return ctx.reply('Cancelled. Send /start to restart.');
+});
+
+// ================= ISSUE HANDLERS =================
+bot.action('disp_account_block', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {};
+
+  return ctx.reply(
+    '👋 Dear Captain, Visit the Hala Home for the Account Block/Suspend. Thanks'
+  );
+});
+
+bot.action('disp_device_issue', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = {};
+  return ctx.reply(
+    '⚠️ Please visit Hala Home for Device Issue support. Thanks'
+  );
+});
+
+bot.action('disp_profile_update', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = { step: 'profile_update_type' };
+  return ctx.editMessageText('Select profile update type:', profileUpdateButtons());
+});
+
+// ================= NUMBER UPDATE FIX =================
+bot.action('profile_number_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    profile_update_type: 'Number Update',
+    step: 'meter_id'
+  };
+
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
+
+bot.action('profile_picture_update', async (ctx) => {
+  await ctx.answerCbQuery();
+
+  ctx.session = {
+    profile_update_type: 'Profile Picture Update',
+    step: 'meter_id'
+  };
+
+  return ctx.reply('Upload picture with White Background and Uniform.');
+});
+
+// ================= TEXT FLOW =================
+bot.on('text', async (ctx) => {
+  if (!ctx.session) ctx.session = {};
+  const text = ctx.message.text;
+
+  // Meter ID step
+  if (ctx.session.step === 'meter_id') {
+    ctx.session.meter_id = text;
+
+    if (ctx.session.profile_update_type === 'Number Update') {
+      ctx.session = {};
+
+      return ctx.reply(
+        '📲 Please click on the link to update number:\n\nhttps://tinyurl.com/2p6spcpb'
+      );
+    }
+
+    if (ctx.session.profile_update_type === 'Profile Picture Update') {
+      ctx.session.step = 'awaiting_profile_picture';
+      return ctx.reply('Upload picture in uniform with white background.');
+    }
+  }
+
+  // fallback safety
+  return;
+});
+
+// ================= SAFE FALLBACK =================
+bot.on('callback_query', async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+  } catch (e) {}
+});
+
+// ================= SERVER =================
 app.use(bot.webhookCallback(WEBHOOK_PATH));
 
 app.listen(PORT, async () => {
