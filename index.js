@@ -90,23 +90,19 @@ bot.action('nav_back_main', async (ctx) => {
 
 bot.action('disp_payment', async (ctx) => {
   await ctx.answerCbQuery();
-
   ctx.session = {
     disposition: 'Payment Issue',
     step: 'meter_id'
   };
-
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
 bot.action('disp_stuck_booking', async (ctx) => {
   await ctx.answerCbQuery();
-
   ctx.session = {
     disposition: 'Stuck Booking',
     step: 'meter_id'
   };
-
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
@@ -126,34 +122,26 @@ bot.action('disp_account_block', async (ctx) => {
 
 bot.action('disp_profile_update', async (ctx) => {
   await ctx.answerCbQuery();
-
   ctx.session = {
     disposition: 'Profile Update',
     step: 'profile_update_type'
   };
-
   return ctx.editMessageText('Select Profile Update Type:', profileUpdateButtons());
 });
 
 bot.action('profile_number_update', async (ctx) => {
   await ctx.answerCbQuery();
-
   ctx.session = {};
-
-  return ctx.reply(
-    'Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb'
-  );
+  return ctx.reply('Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb');
 });
 
 bot.action('profile_picture_update', async (ctx) => {
   await ctx.answerCbQuery();
-
   ctx.session = {
     disposition: 'Profile Update',
     profile_update_type: 'Profile Picture Update',
     step: 'awaiting_profile_picture'
   };
-
   return ctx.reply('Upload Profile Picture (White Background & Uniform)');
 });
 
@@ -161,7 +149,6 @@ bot.action('profile_picture_update', async (ctx) => {
 
 bot.on('text', async (ctx) => {
   if (!ctx.session) ctx.session = {};
-
   const text = ctx.message.text.trim();
 
   if (ctx.session.step === 'check_ticket') {
@@ -195,11 +182,7 @@ bot.on('text', async (ctx) => {
   if (ctx.session.step === 'time') {
     ctx.session.time = text;
     ctx.session.step = 'photo_option';
-
-    return ctx.reply(
-      'Do you want to attach a photo?',
-      photoOptionButtons()
-    );
+    return ctx.reply('Do you want to attach a photo?', photoOptionButtons());
   }
 
   if (ctx.session.step === 'car_side_number') {
@@ -261,11 +244,53 @@ bot.on('photo', async (ctx) => {
   return ctx.reply('Please select the correct option first.');
 });
 
+/* ================= TICKET NUMBER ================= */
+
+async function generateTicketNumber() {
+  const { count, error } = await supabase
+    .from('tickets')
+    .select('*', { count: 'exact', head: true });
+
+  if (error) throw error;
+
+  const nextNumber = (count || 0) + 1;
+  return 'HALA-' + String(nextNumber).padStart(3, '0');
+}
+
+/* ================= ADMIN NOTIFICATION ================= */
+
+async function sendAdminNotification(ctx, data) {
+  if (!process.env.ADMIN_CHAT_ID) {
+    console.log('ADMIN_CHAT_ID missing in Render env');
+    return;
+  }
+
+  const adminMessage =
+    `✅ New Ticket Created\n\n` +
+    `Ticket: ${data.ticket_number}\n` +
+    `Type: ${ctx.session.disposition || 'N/A'}\n` +
+    `Meter ID: ${ctx.session.meter_id || 'N/A'}\n` +
+    `Fare: ${ctx.session.fare || 'N/A'}\n` +
+    `Time: ${ctx.session.time || 'N/A'}\n` +
+    `Car Side Number: ${ctx.session.car_side_number || 'N/A'}\n` +
+    `Description: ${ctx.session.description || 'N/A'}\n` +
+    `Priority: Medium\n` +
+    `Status: Pending`;
+
+  await bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, adminMessage);
+
+  if (ctx.session.photo) {
+    await bot.telegram.sendPhoto(process.env.ADMIN_CHAT_ID, ctx.session.photo, {
+      caption: `Photo attached for Ticket: ${data.ticket_number}`
+    });
+  }
+}
+
 /* ================= CREATE TICKET ================= */
 
 async function createTicket(ctx) {
   try {
-    const ticketNumber = 'HALA-' + Math.floor(1000 + Math.random() * 9000);
+    const ticketNumber = await generateTicketNumber();
 
     const fullPayload = {
       ticket_number: ticketNumber,
@@ -320,6 +345,8 @@ async function createTicket(ctx) {
       console.log('SUPABASE ERROR:', error);
       return ctx.reply('Error creating ticket: ' + error.message);
     }
+
+    await sendAdminNotification(ctx, data);
 
     ctx.session = {};
 
