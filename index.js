@@ -8,124 +8,116 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://hala-support-bot.onrender.com';
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 const WEBHOOK_PATH = '/telegram-webhook';
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
-// ================= SHEETS =================
-const sheetsAuth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-  },
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-
-const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
 
 bot.use(session());
 
 // ================= MENU =================
 function mainMenu() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('Create Ticket', 'create')],
-    [Markup.button.callback('Check Ticket', 'check')]
+    [Markup.button.callback('Create Ticket', 'menu_create')],
+    [Markup.button.callback('Check Ticket', 'menu_check')]
+  ]);
+}
+
+function issueMenu() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Payment Issue', 'disp_payment'),
+      Markup.button.callback('Account Block', 'disp_account_block')
+    ],
+    [
+      Markup.button.callback('Stuck Booking', 'disp_stuck_booking'),
+      Markup.button.callback('Device Issue', 'disp_device')
+    ],
+    [Markup.button.callback('Profile Update', 'disp_profile')]
+  ]);
+}
+
+function profileMenu() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Number Update', 'profile_number'),
+      Markup.button.callback('Profile Picture', 'profile_pic')
+    ]
+  ]);
+}
+
+function ticketButtons(id) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Assign to Me', `assign_${id}`),
+      Markup.button.callback('Resolve', `resolve_${id}`)
+    ]
   ]);
 }
 
 // ================= START =================
 bot.start((ctx) => {
   ctx.session = {};
-  return ctx.reply('Welcome to Hala Captain Support', mainMenu());
+  return ctx.reply('Welcome to Hala Support', mainMenu());
 });
 
-// ================= CREATE MENU =================
-bot.action('create', async (ctx) => {
+// ================= CREATE FLOW FIX =================
+bot.action('menu_create', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.session = { step: 'meter_id' };
+
+  // 🔥 FIX: correct flow restored
+  ctx.session = { step: 'disposition' };
+
+  return ctx.editMessageText('Select Issue Type:', issueMenu());
+});
+
+// ================= DISPOSITIONS =================
+bot.action('disp_payment', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = { disposition: 'Payment Issue', step: 'meter_id' };
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
-// ================= TEAM MESSAGE =================
-async function sendToTeam(ticket, ctx) {
-  try {
-    if (!process.env.TEAM_CHAT_ID) return;
+bot.action('disp_account_block', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = { disposition: 'Account Block', step: 'meter_id' };
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
 
-    const msg =
-`🆕 New Ticket Created
+bot.action('disp_stuck_booking', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = { disposition: 'Stuck Booking', step: 'meter_id' };
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
 
-Ticket: ${ticket.ticket_number}
-Type: ${ticket.disposition}
-Meter ID: ${ticket.driver_id}
-Priority: ${ticket.priority}
-Status: Pending`;
+bot.action('disp_device', async (ctx) => {
+  await ctx.answerCbQuery();
+  return ctx.reply('Please visit Hala Home for Device Issue. Thanks');
+});
 
-    if (ticket.photo_file_id) {
-      await bot.telegram.sendPhoto(
-        process.env.TEAM_CHAT_ID,
-        ticket.photo_file_id,
-        {
-          caption: msg
-        }
-      );
-    } else {
-      await bot.telegram.sendMessage(
-        process.env.TEAM_CHAT_ID,
-        msg
-      );
-    }
-  } catch (e) {
-    console.log('TEAM SEND ERROR:', e.message);
-  }
-}
+bot.action('disp_profile', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session = { disposition: 'Profile Update', step: 'profile_type' };
+  return ctx.editMessageText('Select Type:', profileMenu());
+});
 
-// ================= CREATE TICKET =================
-async function createTicket(ctx) {
-  try {
+// ================= PROFILE =================
+bot.action('profile_number', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session.profile_update_type = 'Number Update';
+  ctx.session.step = 'meter_id';
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
 
-    // 🔥 FIX 1: Ticket format Hala-001
-    const raw = await getNextTicketNumber();
-    const ticketNumber = `Hala-${String(raw).padStart(3, '0')}`;
+bot.action('profile_pic', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session.profile_update_type = 'Profile Picture';
+  ctx.session.step = 'meter_id';
+  return ctx.reply('Enter 7-digit Meter ID:');
+});
 
-    const { data, error } = await supabase
-      .from('tickets')
-      .insert([{
-        ticket_number: ticketNumber,
-        telegram_user_id: String(ctx.from.id),
-        driver_id: ctx.session.meter_id,
-        disposition: ctx.session.disposition || 'General',
-        description: ctx.session.description || '',
-        status: 'Pending',
-        priority: 'Medium',
-        photo_file_id: ctx.session.photo_file_id || null
-      }])
-      .select()
-      .single();
-
-    if (error) {
-      console.log(error);
-      return ctx.reply('DB error');
-    }
-
-    // 🔥 FIX 2: ALWAYS SEND TO TEAM
-    await sendToTeam(data, ctx);
-
-    ctx.session = {};
-
-    return ctx.reply(
-`✅ Ticket Created
-Ticket: ${ticketNumber}`
-    );
-
-  } catch (e) {
-    console.log(e);
-    return ctx.reply('Error creating ticket');
-  }
-}
-
-// ================= METER ID =================
+// ================= TEXT FLOW =================
 bot.on('text', async (ctx) => {
   if (!ctx.session) ctx.session = {};
   const text = ctx.message.text;
@@ -137,24 +129,88 @@ bot.on('text', async (ctx) => {
 
     ctx.session.meter_id = text;
 
+    // ================= NUMBER UPDATE FIX =================
+    if (
+      ctx.session.disposition === 'Profile Update' &&
+      ctx.session.profile_update_type === 'Number Update'
+    ) {
+      await ctx.reply(
+        '📲 Please click on the link to update number:\nhttps://tinyurl.com/2p6spcpb'
+      );
+    }
+
     return createTicket(ctx);
   }
 });
 
-// ================= TICKET NUMBER GENERATOR =================
+// ================= CREATE TICKET =================
+async function createTicket(ctx) {
+  try {
+
+    const raw = await getNextTicketNumber();
+    const ticketNumber = `Hala-${String(raw).padStart(3, '0')}`;
+
+    const { data, error } = await supabase
+      .from('tickets')
+      .insert([{
+        ticket_number: ticketNumber,
+        telegram_user_id: String(ctx.from.id),
+        driver_id: ctx.session.meter_id,
+        disposition: ctx.session.disposition,
+        status: 'Pending',
+        priority: 'Medium'
+      }])
+      .select()
+      .single();
+
+    if (error) return ctx.reply('DB error');
+
+    // ================= TEAM QUEUE FIX =================
+    const msg =
+`🆕 New Ticket
+
+Ticket: ${ticketNumber}
+Type: ${ctx.session.disposition}
+Meter: ${ctx.session.meter_id}
+Status: Pending`;
+
+    if (ctx.session.photo_file_id) {
+      await bot.telegram.sendPhoto(
+        process.env.TEAM_CHAT_ID,
+        ctx.session.photo_file_id,
+        {
+          caption: msg,
+          ...ticketButtons(data.id)
+        }
+      );
+    } else {
+      await bot.telegram.sendMessage(
+        process.env.TEAM_CHAT_ID,
+        msg,
+        ticketButtons(data.id)
+      );
+    }
+
+    ctx.session = {};
+
+    return ctx.reply(`Ticket Created: ${ticketNumber}`);
+
+  } catch (e) {
+    console.log(e);
+    return ctx.reply('Error creating ticket');
+  }
+}
+
+// ================= TICKET GENERATOR =================
 async function getNextTicketNumber() {
-  const { data, error } = await supabase.rpc('generate_hala_ticket_number');
-
-  if (error) throw error;
-
+  const { data } = await supabase.rpc('generate_hala_ticket_number');
   return data;
 }
 
-// ================= WEBHOOK =================
+// ================= SERVER =================
 app.use(bot.webhookCallback(WEBHOOK_PATH));
 
 app.listen(PORT, async () => {
-  console.log('Bot running');
-
   await bot.telegram.setWebhook(`${RENDER_URL}${WEBHOOK_PATH}`);
+  console.log('Bot running');
 });
