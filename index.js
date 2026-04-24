@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const { Telegraf, Markup, session } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
-const { google } = require('googleapis');
 
 const app = express();
 app.use(express.json());
@@ -63,7 +62,7 @@ bot.action('disp_device_issue', async (ctx) => {
   return ctx.reply('Please Visit Hala Home for Device Issue. Thanks');
 });
 
-// ================= PROFILE UPDATE MAIN =================
+// ================= PROFILE UPDATE MENU =================
 bot.action('disp_profile_update', async (ctx) => {
   await ctx.answerCbQuery();
 
@@ -105,7 +104,7 @@ bot.action('profile_picture', async (ctx) => {
   };
 
   return ctx.reply(
-    '📸 Please attach the picture in uniform with white background. Thanks'
+    '📸 Please attach picture in uniform with white background. Thanks'
   );
 });
 
@@ -115,16 +114,17 @@ bot.on('text', async (ctx) => {
 
   if (!ctx.session) ctx.session = {};
 
-  // meter ID
+  // METER ID
   if (ctx.session.step === 'meter_id') {
     ctx.session.meter_id = text;
-    ctx.session.step = 'mobile_number';
-    return ctx.reply('Enter Mobile Number');
+    ctx.session.step = 'number_update_done';
+
+    return ctx.reply('Meter ID received ✔');
   }
 
-  // NUMBER UPDATE FINAL STEP
-  if (ctx.session.step === 'mobile_number') {
-    ctx.session.mobile_number = text;
+  // NUMBER UPDATE FINAL STEP (NO MOBILE NUMBER ANYMORE)
+  if (ctx.session.step === 'number_update_done') {
+    ctx.session.mobile_number = null;
 
     await createTicket(ctx);
 
@@ -133,13 +133,13 @@ bot.on('text', async (ctx) => {
     const url = `https://tinyurl.com/2p6spcpb?ticket=${ticket}&type=number_update`;
 
     await ctx.reply(
-      `📌 Please click on the link:\n${url}\n\n🎫 Ticket: ${ticket}`
+      `📌 Please click on the link to update number:\n${url}\n\n🎫 Ticket: ${ticket}`
     );
 
     if (process.env.TEAM_CHAT_ID) {
       await bot.telegram.sendMessage(
         process.env.TEAM_CHAT_ID,
-        `Number Update Ticket\n${ticket}\n${url}`
+        `📌 Number Update Ticket\nTicket: ${ticket}\nLink: ${url}`
       );
     }
 
@@ -164,7 +164,9 @@ bot.on('photo', async (ctx) => {
       await bot.telegram.sendPhoto(
         process.env.TEAM_CHAT_ID,
         ctx.session.photo,
-        { caption: `Profile Picture Update\nTicket: ${ticket}` }
+        {
+          caption: `Profile Picture Update\nTicket: ${ticket}`
+        }
       );
     }
 
@@ -183,7 +185,6 @@ async function createTicket(ctx) {
         driver_id: ctx.session.meter_id || null,
         description: ctx.session.description || '',
         details_json: {
-          mobile: ctx.session.mobile_number || null,
           profile_type: ctx.session.profile_type || null
         },
         status: 'Pending'
