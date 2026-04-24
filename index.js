@@ -104,7 +104,7 @@ bot.action('disp_account_block', async (ctx) => {
   return ctx.reply('Please visit Hala Home for Account Block/Suspend.');
 });
 
-/* ================= PROFILE UPDATE (FIXED - MAIN ISSUE) ================= */
+/* ================= PROFILE UPDATE (FIXED) ================= */
 
 bot.action('disp_profile_update', async (ctx) => {
   await ctx.answerCbQuery();
@@ -125,15 +125,23 @@ bot.action('disp_profile_update', async (ctx) => {
   );
 });
 
+/* ---------------- NUMBER UPDATE (FIXED AS REQUESTED) ---------------- */
+
 bot.action('profile_number_update', async (ctx) => {
   await ctx.answerCbQuery();
 
-  ctx.session.disposition = 'Profile Update';
-  ctx.session.profile_update_type = 'Number Update';
-  ctx.session.step = 'meter_id';
+  ctx.session = {
+    disposition: 'Profile Update',
+    profile_update_type: 'Number Update',
+    step: null
+  };
 
-  return ctx.reply('Enter 7-digit Meter ID:');
+  return ctx.reply(
+    'Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb'
+  );
 });
+
+/* ---------------- PROFILE PICTURE UPDATE ---------------- */
 
 bot.action('profile_picture_update', async (ctx) => {
   await ctx.answerCbQuery();
@@ -159,9 +167,23 @@ bot.on('text', async (ctx) => {
     }
 
     ctx.session.meter_id = text;
-    ctx.session.step = 'fare';
 
-    return ctx.reply('Enter Fare:');
+    /* PAYMENT ONLY → fare flow */
+    if (ctx.session.disposition === 'Payment Issue') {
+      ctx.session.step = 'fare';
+      return ctx.reply('Enter Fare:');
+    }
+
+    /* STUCK BOOKING → skip fare */
+    if (ctx.session.disposition === 'Stuck Booking') {
+      ctx.session.step = 'car_side_number';
+      return ctx.reply('Enter Car Side Number:');
+    }
+
+    /* PROFILE UPDATE (safety fallback) */
+    if (ctx.session.disposition === 'Profile Update') {
+      return createTicket(ctx);
+    }
   }
 
   /* ---------- FARE ---------- */
@@ -172,7 +194,7 @@ bot.on('text', async (ctx) => {
     return ctx.reply('Enter Time:');
   }
 
-  /* ---------- TIME → PHOTO OPTIONS ---------- */
+  /* ---------- TIME ---------- */
   if (ctx.session.step === 'time') {
     ctx.session.time = text;
     ctx.session.step = 'photo_option';
@@ -184,6 +206,19 @@ bot.on('text', async (ctx) => {
         [Markup.button.callback('⏭ Skip Photo', 'skip_photo')]
       ])
     );
+  }
+
+  /* ---------- STUCK BOOKING EXTRA ---------- */
+  if (ctx.session.step === 'car_side_number') {
+    ctx.session.car_side_number = text;
+    ctx.session.step = 'description';
+
+    return ctx.reply('Enter Description:');
+  }
+
+  if (ctx.session.step === 'description') {
+    ctx.session.description = text;
+    return createTicket(ctx);
   }
 });
 
@@ -205,13 +240,11 @@ bot.action('skip_photo', async (ctx) => {
 
 bot.on('photo', async (ctx) => {
 
-  // Payment flow photo
   if (ctx.session.step === 'awaiting_photo') {
     ctx.session.photo = ctx.message.photo[ctx.message.photo.length - 1].file_id;
     return createTicket(ctx);
   }
 
-  // Profile picture update (FIXED)
   if (ctx.session.step === 'awaiting_profile_picture') {
     ctx.session.photo = ctx.message.photo[ctx.message.photo.length - 1].file_id;
     return createTicket(ctx);
