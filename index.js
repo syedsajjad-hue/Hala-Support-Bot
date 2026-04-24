@@ -164,7 +164,7 @@ bot.action('profile_number_update', async (ctx) => {
     step: 'number_update_waiting'
   };
 
-  await ctx.reply('Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb');
+  await ctx.reply('Please click on the link. Thanks\n\nhttps://forms.gle/AXW6pdCAWqaz79ts5');
 
   setTimeout(async () => {
     try {
