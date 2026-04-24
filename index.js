@@ -2,21 +2,22 @@ require('dotenv').config();
 const express = require('express');
 const { Telegraf, Markup, session } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
-const { google } = require('googleapis');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://hala-support-bot.onrender.com';
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 const WEBHOOK_PATH = '/telegram-webhook';
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-bot.use(session());
+bot.use(session({
+  defaultSession: () => ({})
+}));
 
-/* ================= MENU ================= */
+/* ================= MAIN MENU ================= */
 
 function mainMenuButtons() {
   return Markup.inlineKeyboard([
@@ -39,29 +40,22 @@ function issueTypeButtons() {
       Markup.button.callback('Profile Update', 'disp_profile_update')
     ],
     [
-      Markup.button.callback('Back', 'nav_back_main'),
-      Markup.button.callback('Cancel', 'nav_cancel')
+      Markup.button.callback('Back', 'nav_back_main')
     ]
   ]);
 }
 
-function profileUpdateButtons() {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback('Number Update', 'profile_number_update'),
-      Markup.button.callback('Profile Picture Update', 'profile_picture_update')
-    ]
-  ]);
-}
-
-/* ================= START FIX ================= */
+/* ================= START ================= */
 
 bot.start(async (ctx) => {
   ctx.session = {};
-  return ctx.reply('Welcome to Hala Captain Support Bot', mainMenuButtons());
+  return ctx.reply(
+    'Welcome to Hala Captain Support',
+    mainMenuButtons()
+  );
 });
 
-/* ================= MAIN MENU ================= */
+/* ================= MENU ================= */
 
 bot.action('menu_create_ticket', async (ctx) => {
   await ctx.answerCbQuery();
@@ -69,21 +63,17 @@ bot.action('menu_create_ticket', async (ctx) => {
   return ctx.editMessageText('Select issue type:', issueTypeButtons());
 });
 
-bot.action('menu_check_status', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = { step: 'check_ticket' };
-  return ctx.reply('Enter Ticket Number:');
-});
-
 bot.action('nav_back_main', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = {};
-  return ctx.editMessageText('Main Menu', mainMenuButtons());
+  return ctx.editMessageText(
+    'Welcome to Hala Captain Support',
+    mainMenuButtons()
+  );
 });
 
-/* ================= FIXED DISPOSITIONS ================= */
+/* ================= DISPOSITIONS ================= */
 
-// PAYMENT ISSUE (FIXED FLOW)
 bot.action('disp_payment', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = {
@@ -93,7 +83,6 @@ bot.action('disp_payment', async (ctx) => {
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
-// STUCK BOOKING (FIXED FLOW)
 bot.action('disp_stuck_booking', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = {
@@ -103,121 +92,84 @@ bot.action('disp_stuck_booking', async (ctx) => {
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
-// DEVICE ISSUE FIXED MESSAGE
 bot.action('disp_device_issue', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = {};
-  return ctx.reply(
-    '⚠️ Please visit Hala Home for Device Issue Support.\nThanks'
-  );
+  return ctx.reply('Please visit Hala Home for Device Issue Support.');
 });
 
-// ACCOUNT BLOCK FIXED MESSAGE
 bot.action('disp_account_block', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session = {};
-  return ctx.reply(
-    '👋 Dear Captain, Visit the Hala Home for the Account Block/Suspend. Thanks'
-  );
+  return ctx.reply('Please visit Hala Home for Account Block/Suspend.');
 });
 
-/* ================= PROFILE UPDATE ================= */
-
-bot.action('disp_profile_update', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = { step: 'profile_update_type' };
-  return ctx.editMessageText('Select Profile Update Type:', profileUpdateButtons());
-});
-
-// NUMBER UPDATE FIX
-bot.action('profile_number_update', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Profile Update',
-    profile_update_type: 'Number Update',
-    step: 'meter_id'
-  };
-  return ctx.reply('Enter 7-digit Meter ID:');
-});
-
-// PROFILE PICTURE
-bot.action('profile_picture_update', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Profile Update',
-    profile_update_type: 'Profile Picture Update',
-    step: 'meter_id'
-  };
-  return ctx.reply('Upload picture (White Background & Uniform)');
-});
-
-/* ================= TEXT FLOW FIX ================= */
+/* ================= TEXT FLOW ================= */
 
 bot.on('text', async (ctx) => {
   if (!ctx.session) ctx.session = {};
   const text = ctx.message.text;
 
-  // ================= METER ID HANDLING =================
+  /* ---------- METER ID ---------- */
   if (ctx.session.step === 'meter_id') {
 
+    if (!/^\d{7}$/.test(text)) {
+      return ctx.reply('Invalid Meter ID. Enter 7 digits only.');
+    }
+
     ctx.session.meter_id = text;
+    ctx.session.step = 'fare';
 
-    // PAYMENT ISSUE → continue flow
-    if (ctx.session.disposition === 'Payment Issue') {
-      ctx.session.step = 'fare';
-      return ctx.reply('Enter Fare:');
-    }
-
-    // STUCK BOOKING → continue flow
-    if (ctx.session.disposition === 'Stuck Booking') {
-      ctx.session.step = 'car_side_number';
-      return ctx.reply('Enter Car Side Number:');
-    }
-
-    // PROFILE UPDATE → NUMBER UPDATE FIXED (YOUR REQUEST)
-    if (ctx.session.disposition === 'Profile Update') {
-
-      if (ctx.session.profile_update_type === 'Number Update') {
-        ctx.session.step = null;
-
-        return ctx.reply(
-          '📲 Please click the link to update your number:\n\nhttps://tinyurl.com/2p6spcpb'
-        );
-      }
-
-      if (ctx.session.profile_update_type === 'Profile Picture Update') {
-        ctx.session.step = 'awaiting_profile_picture';
-        return ctx.reply('Upload Profile Picture Now');
-      }
-    }
+    return ctx.reply('Enter Fare:');
   }
 
-  // ================= PAYMENT FLOW =================
+  /* ---------- FARE ---------- */
   if (ctx.session.step === 'fare') {
     ctx.session.fare = text;
     ctx.session.step = 'time';
+
     return ctx.reply('Enter Time:');
   }
 
+  /* ---------- TIME → PHOTO OPTIONS ---------- */
   if (ctx.session.step === 'time') {
     ctx.session.time = text;
-    ctx.session.step = 'awaiting_photo';
-    return ctx.reply('Send Photo or Skip');
-  }
+    ctx.session.step = 'photo_option';
 
-  if (ctx.session.step === 'car_side_number') {
-    ctx.session.car_side_number = text;
-    ctx.session.step = 'description';
-    return ctx.reply('Enter Description:');
+    return ctx.reply(
+      'Do you want to attach a photo?',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('📸 Send Photo', 'send_photo')],
+        [Markup.button.callback('⏭ Skip Photo', 'skip_photo')]
+      ])
+    );
   }
+});
 
-  if (ctx.session.step === 'description') {
-    ctx.session.description = text;
+/* ================= PHOTO OPTIONS ================= */
+
+bot.action('send_photo', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session.step = 'awaiting_photo';
+  return ctx.reply('Please send the photo 📸');
+});
+
+bot.action('skip_photo', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session.photo = null;
+  return createTicket(ctx);
+});
+
+/* ================= PHOTO HANDLER ================= */
+
+bot.on('photo', async (ctx) => {
+  if (ctx.session.step === 'awaiting_photo') {
+    ctx.session.photo = ctx.message.photo[ctx.message.photo.length - 1].file_id;
     return createTicket(ctx);
   }
 });
 
-/* ================= CREATE TICKET (UNCHANGED) ================= */
+/* ================= CREATE TICKET ================= */
 
 async function createTicket(ctx) {
   try {
@@ -228,7 +180,10 @@ async function createTicket(ctx) {
         telegram_user_id: String(ctx.from.id),
         driver_id: ctx.session.meter_id,
         disposition: ctx.session.disposition,
-        description: ctx.session.description,
+        description: ctx.session.description || '',
+        fare: ctx.session.fare,
+        time: ctx.session.time,
+        photo: ctx.session.photo || null,
         status: 'Pending',
         priority: 'Medium'
       }])
@@ -251,11 +206,11 @@ async function createTicket(ctx) {
 
 /* ================= SERVER ================= */
 
-app.get('/', (req, res) => res.send('Bot Running'));
+app.get('/', (req, res) => res.send('Running'));
 
 app.use(bot.webhookCallback(WEBHOOK_PATH));
 
 app.listen(PORT, async () => {
   await bot.telegram.setWebhook(RENDER_URL + WEBHOOK_PATH);
-  console.log('Bot Running');
+  console.log('Bot running');
 });
