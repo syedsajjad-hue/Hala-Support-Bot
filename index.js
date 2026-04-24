@@ -16,8 +16,6 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 
 bot.use(session({ defaultSession: () => ({}) }));
 
-/* ================= BUTTONS ================= */
-
 function mainMenuButtons() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('Create Ticket', 'menu_create_ticket')],
@@ -35,12 +33,7 @@ function issueTypeButtons() {
       Markup.button.callback('Stuck Booking', 'disp_stuck_booking'),
       Markup.button.callback('Device Issue', 'disp_device_issue')
     ],
-    [
-      Markup.button.callback('Profile Update', 'disp_profile_update')
-    ],
-    [
-      Markup.button.callback('Back', 'nav_back_main')
-    ]
+    [Markup.button.callback('Profile Update', 'disp_profile_update')]
   ]);
 }
 
@@ -58,6 +51,37 @@ function photoOptionButtons() {
     [Markup.button.callback('📸 Send Photo', 'send_photo')],
     [Markup.button.callback('⏭ Skip Photo', 'skip_photo')]
   ]);
+}
+
+function queueButtons(ticketNumber) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('👤 Assign to Me', `assign_${ticketNumber}`),
+      Markup.button.callback('✅ Resolve', `resolve_${ticketNumber}`)
+    ]
+  ]);
+}
+
+function getAgentName(ctx) {
+  if (ctx.from.username) return '@' + ctx.from.username;
+  return [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || String(ctx.from.id);
+}
+
+function ticketMessage(ticket, status = 'Pending', assignedTo = 'Unassigned') {
+  const statusIcon = status === 'Resolved' ? '🟢 Resolved' : '🟡 Pending';
+
+  return (
+    `${status === 'Resolved' ? '✅ Ticket Resolved' : '✅ Ticket Created'}\n\n` +
+    `Ticket: ${ticket.ticket_number}\n` +
+    `Type: ${ticket.disposition || 'N/A'}\n` +
+    `Meter ID: ${ticket.driver_id || 'N/A'}\n` +
+    `Fare: ${ticket.fare || 'N/A'}\n` +
+    `Time: ${ticket.time || 'N/A'}\n` +
+    `Car Side Number: ${ticket.car_side_number || 'N/A'}\n` +
+    `Priority: ${ticket.priority || 'Medium'}\n` +
+    `Assigned: ${assignedTo || 'Unassigned'}\n` +
+    `Status: ${statusIcon}`
+  );
 }
 
 /* ================= START ================= */
@@ -81,29 +105,17 @@ bot.action('menu_check_status', async (ctx) => {
   return ctx.reply('Enter Ticket Number:');
 });
 
-bot.action('nav_back_main', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session = {};
-  return ctx.editMessageText('Welcome to Hala Captain Support', mainMenuButtons());
-});
-
 /* ================= ISSUE TYPES ================= */
 
 bot.action('disp_payment', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Payment Issue',
-    step: 'meter_id'
-  };
+  ctx.session = { disposition: 'Payment Issue', step: 'meter_id' };
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
 bot.action('disp_stuck_booking', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Stuck Booking',
-    step: 'meter_id'
-  };
+  ctx.session = { disposition: 'Stuck Booking', step: 'meter_id' };
   return ctx.reply('Enter 7-digit Meter ID:');
 });
 
@@ -123,10 +135,7 @@ bot.action('disp_account_block', async (ctx) => {
 
 bot.action('disp_profile_update', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.session = {
-    disposition: 'Profile Update',
-    step: 'profile_update_type'
-  };
+  ctx.session = { disposition: 'Profile Update' };
   return ctx.editMessageText('Select Profile Update Type:', profileUpdateButtons());
 });
 
@@ -150,7 +159,6 @@ bot.action('profile_picture_update', async (ctx) => {
 
 bot.on('text', async (ctx) => {
   if (!ctx.session) ctx.session = {};
-
   const text = ctx.message.text.trim();
 
   if (ctx.session.step === 'check_ticket') {
@@ -201,7 +209,7 @@ bot.on('text', async (ctx) => {
   return ctx.reply('Please use /start to begin.');
 });
 
-/* ================= PHOTO OPTIONS ================= */
+/* ================= PHOTO ================= */
 
 bot.action('send_photo', async (ctx) => {
   await ctx.answerCbQuery();
@@ -225,11 +233,8 @@ bot.action('skip_photo', async (ctx) => {
   return createTicket(ctx);
 });
 
-/* ================= PHOTO HANDLER ================= */
-
 bot.on('photo', async (ctx) => {
   if (!ctx.session) ctx.session = {};
-
   const photoId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
 
   if (ctx.session.step === 'awaiting_photo') {
@@ -255,50 +260,28 @@ async function generateTicketNumber() {
 
   if (error) throw error;
 
-  const nextNumber = (count || 0) + 1;
-  return 'HALA-' + String(nextNumber).padStart(3, '0');
+  return 'HALA-' + String((count || 0) + 1).padStart(3, '0');
 }
 
-/* ================= GROUP NOTIFICATION ================= */
+/* ================= SEND TO QUEUE ================= */
 
-async function sendAdminNotification(ctx, data) {
-  try {
-    const teamChatId = process.env.TEAM_CHAT_ID;
+async function sendTicketToQueue(ctx, ticket) {
+  const teamChatId = process.env.TEAM_CHAT_ID;
 
-    if (!teamChatId) {
-      console.log('TEAM_CHAT_ID missing in Render ENV');
-      return ctx.reply('Ticket created, but TEAM_CHAT_ID is missing in Render ENV.');
-    }
+  if (!teamChatId) {
+    await ctx.reply('Ticket created, but TEAM_CHAT_ID missing in Render ENV.');
+    return;
+  }
 
-    const message =
-      `✅ Ticket Created\n\n` +
-      `Ticket: ${data.ticket_number}\n` +
-      `Type: ${ctx.session.disposition || 'N/A'}\n` +
-      `Meter ID: ${ctx.session.meter_id || 'N/A'}\n` +
-      `Fare: ${ctx.session.fare || 'N/A'}\n` +
-      `Time: ${ctx.session.time || 'N/A'}\n` +
-      `Car Side Number: ${ctx.session.car_side_number || 'N/A'}\n` +
-      `Description: ${ctx.session.description || 'N/A'}\n` +
-      `Priority: Medium\n` +
-      `Status: Pending`;
+  const msg = ticketMessage(ticket, 'Pending', 'Unassigned');
 
-    await bot.telegram.sendMessage(teamChatId, message);
-
-    if (ctx.session.photo) {
-      await bot.telegram.sendPhoto(teamChatId, ctx.session.photo, {
-        caption: `Photo attached for Ticket: ${data.ticket_number}`
-      });
-    }
-
-    console.log('Ticket sent to support queue successfully');
-
-  } catch (err) {
-    console.log('GROUP SEND ERROR:', err);
-
-    await ctx.reply(
-      'Ticket created, but failed to send to support group:\n' +
-      (err.description || err.message)
-    );
+  if (ctx.session.photo) {
+    await bot.telegram.sendPhoto(teamChatId, ctx.session.photo, {
+      caption: msg,
+      reply_markup: queueButtons(ticket.ticket_number).reply_markup
+    });
+  } else {
+    await bot.telegram.sendMessage(teamChatId, msg, queueButtons(ticket.ticket_number));
   }
 }
 
@@ -308,7 +291,7 @@ async function createTicket(ctx) {
   try {
     const ticketNumber = await generateTicketNumber();
 
-    const fullPayload = {
+    const payload = {
       ticket_number: ticketNumber,
       telegram_user_id: String(ctx.from.id),
       driver_id: ctx.session.meter_id || 'N/A',
@@ -318,19 +301,18 @@ async function createTicket(ctx) {
       time: ctx.session.time || '',
       photo: ctx.session.photo || null,
       car_side_number: ctx.session.car_side_number || '',
+      assigned_to: 'Unassigned',
       status: 'Pending',
       priority: 'Medium'
     };
 
     let { data, error } = await supabase
       .from('tickets')
-      .insert([fullPayload])
+      .insert([payload])
       .select()
       .single();
 
     if (error) {
-      console.log('FULL INSERT FAILED:', error.message);
-
       const basicPayload = {
         ticket_number: ticketNumber,
         telegram_user_id: String(ctx.from.id),
@@ -343,6 +325,7 @@ async function createTicket(ctx) {
           `Photo: ${ctx.session.photo || 'No Photo'}\n` +
           `Car Side Number: ${ctx.session.car_side_number || 'N/A'}\n` +
           `Description: ${ctx.session.description || 'N/A'}`,
+        assigned_to: 'Unassigned',
         status: 'Pending',
         priority: 'Medium'
       };
@@ -362,7 +345,7 @@ async function createTicket(ctx) {
       return ctx.reply('Error creating ticket: ' + error.message);
     }
 
-    await sendAdminNotification(ctx, data);
+    await sendTicketToQueue(ctx, data);
 
     ctx.session = {};
 
@@ -373,6 +356,80 @@ async function createTicket(ctx) {
     return ctx.reply('Error creating ticket: ' + err.message);
   }
 }
+
+/* ================= ASSIGN BUTTON ================= */
+
+bot.action(/^assign_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const ticketNumber = ctx.match[1];
+  const agent = getAgentName(ctx);
+
+  const { data, error } = await supabase
+    .from('tickets')
+    .update({ assigned_to: agent })
+    .eq('ticket_number', ticketNumber)
+    .select()
+    .single();
+
+  if (error || !data) {
+    return ctx.reply('Unable to assign ticket.');
+  }
+
+  const msg = ticketMessage(data, data.status || 'Pending', agent);
+
+  try {
+    if (ctx.callbackQuery.message.photo) {
+      await ctx.editMessageCaption(msg, queueButtons(ticketNumber));
+    } else {
+      await ctx.editMessageText(msg, queueButtons(ticketNumber));
+    }
+  } catch (err) {
+    console.log('ASSIGN EDIT ERROR:', err.message);
+  }
+});
+
+/* ================= RESOLVE BUTTON ================= */
+
+bot.action(/^resolve_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const ticketNumber = ctx.match[1];
+  const agent = getAgentName(ctx);
+
+  const { data, error } = await supabase
+    .from('tickets')
+    .update({
+      status: 'Resolved',
+      assigned_to: agent
+    })
+    .eq('ticket_number', ticketNumber)
+    .select()
+    .single();
+
+  if (error || !data) {
+    return ctx.reply('Unable to resolve ticket.');
+  }
+
+  const resolvedMsg = ticketMessage(data, 'Resolved', agent);
+
+  try {
+    if (ctx.callbackQuery.message.photo) {
+      await ctx.editMessageCaption(resolvedMsg);
+    } else {
+      await ctx.editMessageText(resolvedMsg);
+    }
+  } catch (err) {
+    console.log('RESOLVE EDIT ERROR:', err.message);
+  }
+
+  if (data.telegram_user_id) {
+    await bot.telegram.sendMessage(
+      data.telegram_user_id,
+      `✅ Your ticket has been resolved.\n\nTicket: ${data.ticket_number}\nStatus: 🟢 Resolved`
+    ).catch(err => console.log('DRIVER NOTIFY ERROR:', err.message));
+  }
+});
 
 /* ================= CHECK STATUS ================= */
 
@@ -395,12 +452,11 @@ async function checkTicketStatus(ctx, ticketNumber) {
     );
 
   } catch (err) {
-    console.log('CHECK STATUS ERROR:', err.message);
     return ctx.reply('Error checking ticket.');
   }
 }
 
-/* ================= ANALYTICS DASHBOARD ================= */
+/* ================= DASHBOARD ================= */
 
 app.get('/dashboard', async (req, res) => {
   try {
@@ -412,7 +468,6 @@ app.get('/dashboard', async (req, res) => {
     if (error) throw error;
 
     const allTickets = tickets || [];
-
     const totalTickets = allTickets.length;
     const openTickets = allTickets.filter(t => (t.status || 'Pending') !== 'Resolved').length;
     const resolvedTickets = allTickets.filter(t => (t.status || '') === 'Resolved').length;
@@ -440,37 +495,19 @@ app.get('/dashboard', async (req, res) => {
         <td><span class="badge">${t.status || 'Pending'}</span></td>
         <td>${t.assigned_to || 'Unassigned'}</td>
         <td>${(t.description || '').replace(/\n/g, '<br>')}</td>
-        <td>
-          ${t.status === 'Resolved'
-            ? 'Resolved'
-            : `<a class="resolve" href="/resolve/${t.id}">Resolve</a>`
-          }
-        </td>
       </tr>
     `).join('');
 
     const typeBars = Object.entries(typeCounts).map(([k, v]) => `
-      <div class="bar-row">
-        <span>${k}</span>
-        <div class="bar-bg"><div class="bar purple" style="width:${Math.min(v * 12, 100)}%"></div></div>
-        <b>${v}</b>
-      </div>
+      <div class="bar-row"><span>${k}</span><div class="bar-bg"><div class="bar purple" style="width:${Math.min(v * 12, 100)}%"></div></div><b>${v}</b></div>
     `).join('');
 
     const statusBars = Object.entries(statusCounts).map(([k, v]) => `
-      <div class="bar-row">
-        <span>${k}</span>
-        <div class="bar-bg"><div class="bar orange" style="width:${Math.min(v * 12, 100)}%"></div></div>
-        <b>${v}</b>
-      </div>
+      <div class="bar-row"><span>${k}</span><div class="bar-bg"><div class="bar orange" style="width:${Math.min(v * 12, 100)}%"></div></div><b>${v}</b></div>
     `).join('');
 
     const agentBars = Object.entries(agentCounts).map(([k, v]) => `
-      <div class="bar-row">
-        <span>${k}</span>
-        <div class="bar-bg"><div class="bar green" style="width:${Math.min(v * 12, 100)}%"></div></div>
-        <b>${v}</b>
-      </div>
+      <div class="bar-row"><span>${k}</span><div class="bar-bg"><div class="bar green" style="width:${Math.min(v * 12, 100)}%"></div></div><b>${v}</b></div>
     `).join('');
 
     res.send(`
@@ -481,136 +518,48 @@ app.get('/dashboard', async (req, res) => {
 <style>
 body{margin:0;font-family:Arial;background:#eef5ff;color:#222}
 .header{background:linear-gradient(90deg,#0d6efd,#0057d9);color:#fff;padding:25px}
-.header h1{margin:0;font-size:30px}
-.header p{margin:8px 0 0;color:#dce8ff}
-.container{padding:22px}
-.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:25px}
-.card{background:#fff;border-radius:16px;padding:22px;box-shadow:0 2px 10px #d5e0f0}
-.card h3{margin:0 0 12px;font-size:17px}
+.header h1{margin:0;font-size:30px}.header p{margin:8px 0 0;color:#dce8ff}
+.container{padding:22px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:25px}
+.card,.filters,.panel,.table-wrap{background:#fff;border-radius:16px;padding:22px;box-shadow:0 2px 10px #d5e0f0}
 .card .num{font-size:38px;font-weight:bold;color:#1f72d8}
-.filters{background:#fff;border-radius:16px;padding:22px;margin-bottom:25px;box-shadow:0 2px 10px #d5e0f0}
-.filters h2{margin-top:0}
-.filter-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:15px}
-input,select{width:100%;padding:12px;border:1px solid #d0d8e5;border-radius:10px;font-size:14px}
+.filters{margin-bottom:25px}.filter-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:15px}
+input,select{width:100%;padding:12px;border:1px solid #d0d8e5;border-radius:10px}
 .analytics{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:25px}
-.panel{background:#fff;border-radius:16px;padding:22px;box-shadow:0 2px 10px #d5e0f0}
-.panel h2{margin-top:0}
 .bar-row{display:grid;grid-template-columns:110px 1fr 30px;gap:10px;align-items:center;margin:12px 0;font-size:14px}
-.bar-bg{height:16px;background:#edf0fb;border-radius:20px;overflow:hidden}
-.bar{height:100%;border-radius:20px}
-.green{background:#20c997}
-.orange{background:#ffc107}
-.purple{background:#7b3ff2}
-.table-wrap{background:#fff;border-radius:16px;padding:20px;box-shadow:0 2px 10px #d5e0f0}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th{background:#0d6efd;color:#fff;padding:12px;text-align:left}
+.bar-bg{height:16px;background:#edf0fb;border-radius:20px;overflow:hidden}.bar{height:100%;border-radius:20px}
+.green{background:#20c997}.orange{background:#ffc107}.purple{background:#7b3ff2}
+table{width:100%;border-collapse:collapse;font-size:14px}th{background:#0d6efd;color:#fff;padding:12px;text-align:left}
 td{border-bottom:1px solid #e5eaf2;padding:11px;vertical-align:top}
 .badge{background:#eaf2ff;color:#0d6efd;padding:5px 10px;border-radius:20px;font-weight:bold}
-.resolve{color:#0d6efd;font-weight:bold;text-decoration:none}
-@media(max-width:1100px){
-.cards,.analytics{grid-template-columns:repeat(2,1fr)}
-.filter-grid{grid-template-columns:repeat(2,1fr)}
-}
 </style>
 </head>
 <body>
-
-<div class="header">
-  <h1>Hala Analytics Dashboard</h1>
-  <p>Filters, live ticket analytics, and support performance overview</p>
-</div>
-
+<div class="header"><h1>Hala Analytics Dashboard</h1><p>Filters, live ticket analytics, and support performance overview</p></div>
 <div class="container">
-
-  <div class="cards">
-    <div class="card"><h3>Total Tickets</h3><div class="num">${totalTickets}</div></div>
-    <div class="card"><h3>Open Tickets</h3><div class="num">${openTickets}</div></div>
-    <div class="card"><h3>Resolved Tickets</h3><div class="num">${resolvedTickets}</div></div>
-    <div class="card"><h3>High Priority</h3><div class="num">${highPriority}</div></div>
-  </div>
-
-  <div class="filters">
-    <h2>Filters</h2>
-    <div class="filter-grid">
-      <input placeholder="Ticket, type, agent, meter">
-      <select><option>All Status</option><option>Pending</option><option>Resolved</option></select>
-      <select><option>All Priority</option><option>High</option><option>Medium</option><option>Low</option></select>
-      <select><option>All Agent</option></select>
-      <select><option>Overall</option></select>
-      <input type="date">
-    </div>
-  </div>
-
-  <div class="analytics">
-    <div class="panel">
-      <h2>Tickets Per Day</h2>
-      <p>Live count based on ticket creation date</p>
-    </div>
-
-    <div class="panel">
-      <h2>Agent Performance</h2>
-      ${agentBars || 'No agent data'}
-    </div>
-
-    <div class="panel">
-      <h2>Status Breakdown</h2>
-      ${statusBars || 'No status data'}
-    </div>
-
-    <div class="panel">
-      <h2>Type Score Board</h2>
-      ${typeBars || 'No type data'}
-    </div>
-  </div>
-
-  <div class="table-wrap">
-    <h2>Tickets</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Ticket</th>
-          <th>Type</th>
-          <th>Meter ID</th>
-          <th>Priority</th>
-          <th>Status</th>
-          <th>Agent</th>
-          <th>Description</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>${rows || '<tr><td colspan="8">No tickets found</td></tr>'}</tbody>
-    </table>
-  </div>
-
+<div class="cards">
+<div class="card"><h3>Total Tickets</h3><div class="num">${totalTickets}</div></div>
+<div class="card"><h3>Open Tickets</h3><div class="num">${openTickets}</div></div>
+<div class="card"><h3>Resolved Tickets</h3><div class="num">${resolvedTickets}</div></div>
+<div class="card"><h3>High Priority</h3><div class="num">${highPriority}</div></div>
+</div>
+<div class="filters"><h2>Filters</h2><div class="filter-grid">
+<input placeholder="Ticket, type, agent, meter"><select><option>All Status</option></select><select><option>All Priority</option></select><select><option>All Agent</option></select><select><option>Overall</option></select><input type="date">
+</div></div>
+<div class="analytics">
+<div class="panel"><h2>Tickets Per Day</h2><p>Live count based on ticket creation date</p></div>
+<div class="panel"><h2>Agent Performance</h2>${agentBars || 'No agent data'}</div>
+<div class="panel"><h2>Status Breakdown</h2>${statusBars || 'No status data'}</div>
+<div class="panel"><h2>Type Score Board</h2>${typeBars || 'No type data'}</div>
+</div>
+<div class="table-wrap"><h2>Tickets</h2><table>
+<thead><tr><th>Ticket</th><th>Type</th><th>Meter ID</th><th>Priority</th><th>Status</th><th>Agent</th><th>Description</th></tr></thead>
+<tbody>${rows || '<tr><td colspan="7">No tickets found</td></tr>'}</tbody>
+</table></div>
 </div>
 </body>
-</html>
-    `);
-
+</html>`);
   } catch (err) {
-    console.log('DASHBOARD ERROR:', err.message);
     res.send('Dashboard error: ' + err.message);
-  }
-});
-
-/* ================= RESOLVE TICKET ================= */
-
-app.get('/resolve/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const { error } = await supabase
-      .from('tickets')
-      .update({ status: 'Resolved' })
-      .eq('id', id);
-
-    if (error) throw error;
-
-    res.redirect('/dashboard');
-
-  } catch (err) {
-    console.log('RESOLVE ERROR:', err.message);
-    res.send('Resolve error: ' + err.message);
   }
 });
 
