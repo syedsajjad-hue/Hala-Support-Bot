@@ -1,4 +1,4 @@
-require('dotenv').config();
+\require('dotenv').config();
 
 const express = require('express');
 const { Telegraf, Markup, session } = require('telegraf');
@@ -35,9 +35,7 @@ function issueTypeButtons() {
       Markup.button.callback('Stuck Booking', 'disp_stuck_booking'),
       Markup.button.callback('Device Issue', 'disp_device_issue')
     ],
-    [
-      Markup.button.callback('Profile Update', 'disp_profile_update')
-    ]
+    [Markup.button.callback('Profile Update', 'disp_profile_update')]
   ]);
 }
 
@@ -86,6 +84,10 @@ function ticketMessage(ticket) {
     msg +=
       `Fare: ${ticket.fare || 'N/A'}\n` +
       `Time: ${ticket.time || 'N/A'}\n`;
+  }
+
+  if (ticket.disposition === 'Profile Update') {
+    msg += `Description: ${ticket.description || 'N/A'}\n`;
   }
 
   msg +=
@@ -153,8 +155,40 @@ bot.action('disp_profile_update', async (ctx) => {
 
 bot.action('profile_number_update', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.session = {};
-  return ctx.reply('Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb');
+
+  const userId = ctx.from.id;
+
+  ctx.session = {
+    disposition: 'Profile Update',
+    profile_update_type: 'Number Update',
+    step: 'number_update_waiting'
+  };
+
+  await ctx.reply('Please click on the link. Thanks\n\nhttps://tinyurl.com/2p6spcpb');
+
+  setTimeout(async () => {
+    try {
+      const fakeCtx = {
+        from: { id: userId },
+        session: {
+          disposition: 'Profile Update',
+          profile_update_type: 'Number Update',
+          meter_id: 'N/A',
+          car_side_number: 'N/A',
+          description: 'Number Update Link Shared',
+          fare: '',
+          time: '',
+          photo: null
+        },
+        reply: (msg) => bot.telegram.sendMessage(userId, msg)
+      };
+
+      await createTicket(fakeCtx);
+
+    } catch (err) {
+      console.log('NUMBER UPDATE DELAY ERROR:', err.message);
+    }
+  }, 5 * 60 * 1000);
 });
 
 bot.action('profile_picture_update', async (ctx) => {
@@ -184,7 +218,6 @@ bot.on('text', async (ctx) => {
 
     ctx.session.meter_id = text;
     ctx.session.step = 'car_side_number';
-
     return ctx.reply('Enter Car Side Number:');
   }
 
@@ -253,6 +286,7 @@ bot.on('photo', async (ctx) => {
   if (ctx.session.step === 'awaiting_profile_picture') {
     ctx.session.photo = photoId;
     ctx.session.car_side_number = 'N/A';
+    ctx.session.description = 'Profile Picture Update';
     return createTicket(ctx);
   }
 
